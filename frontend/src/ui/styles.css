@@ -1,0 +1,250 @@
+/*
+ * 模块名称: 全局样式
+ * 功能描述: 定义应用的基础 Tailwind 指令、Tauri 拖拽区域支持、CSS 变量（主题 Tokens）以及 Ant Design 组件的样式覆盖。
+ */
+@import "tailwindcss";
+
+/* Tauri 窗口拖拽区域支持（Windows 平台必须） */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] textarea,
+[data-tauri-drag-region] [role="button"],
+[data-tauri-drag-region] .ant-btn,
+[data-tauri-drag-region] .ant-space,
+[data-tauri-no-drag] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+:root {
+  --primary-color: #0abab5;
+  --secondary-color: #475569;
+  --app-bg: #f5f7fa;
+  --surface-bg: #ffffff;
+  --text-color: #0f172a;
+  --text-secondary-color: #475569;
+  --secondary-bg: #f1f5f9;
+  --secondary-border: #e2e8f0;
+  --font-size-base: 14px;
+  --font-size-sm: 12px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+  --radius-base: 8px;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--app-bg);
+  color: var(--text-color);
+  font-size: var(--font-size-base);
+}
+
+.matrixit-title-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: #000000;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.matrixit-title-link:hover {
+  color: var(--primary-color);
+}
+
+.matrixit-title-link:focus-visible {
+  outline: 2px solid rgba(15, 23, 42, 0.22);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.matrixit-table .ant-spin-container {
+  padding-bottom: 12px;
+}
+
+.matrixit-table .ant-pagination-options .ant-select-selection-search,
+.matrixit-table .ant-pagination-options .ant-select-selection-search-input {
+  display: none !important;
+}
+
+.custom-scrollbar,
+.ant-table-body,
+.ant-table-content {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 23, 42, 0.28) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar,
+.ant-table-body::-webkit-scrollbar,
+.ant-table-content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track,
+.ant-table-body::-webkit-scrollbar-track,
+.ant-table-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb,
+.ant-table-body::-webkit-scrollbar-thumb,
+.ant-table-content::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.22);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover,
+.ant-table-body::-webkit-scrollbar-thumb:hover,
+.ant-table-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 23, 42, 0.32);
+  background-clip: padding-box;
+}
+
+.custom-scrollbar::-webkit-scrollbar-button,
+.ant-table-body::-webkit-scrollbar-button,
+.ant-table-content::-webkit-scrollbar-button {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.matrixit-col-resizer::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  right: 3px;
+  width: 1px;
+  background: rgba(15, 23, 42, 0.12);
+  opacity: 0;
+  transition: opacity 150ms;
+}
+
+th:hover .matrixit-col-resizer::before {
+  opacity: 1;
+}
+
+.ant-table-wrapper .ant-table-thead th.ant-table-column-has-sorters .ant-table-column-sorters {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: flex-start !important;
+  gap: 6px;
+  width: auto;
+}
+
+.matrixit-table .ant-table-thead th.ant-table-column-has-sorters .ant-table-column-sorters {
+  padding-right: 12px;
+}
+
+.ant-table-wrapper .ant-table-thead th.ant-table-column-has-sorters .ant-table-column-title {
+  flex: 0 0 auto;
+}
+
+.ant-table-wrapper .ant-table-thead th.ant-table-column-has-sorters .ant-table-column-sorter {
+  flex: 0 0 auto;
+  margin-inline-start: 0;
+}
+
+.primary-color {
+  color: var(--primary-color);
+}
+
+.secondary-color {
+  color: var(--secondary-color);
+}
+
+.bg-primary {
+  background-color: var(--primary-color);
+}
+
+.bg-secondary {
+  background-color: var(--secondary-bg);
+}
+
+.border-primary {
+  border-color: var(--primary-color);
+}
+
+.border-secondary {
+  border-color: var(--secondary-border);
+}
+
+.font-size-sm {
+  font-size: var(--font-size-sm);
+}
+
+.font-size-base {
+  font-size: var(--font-size-base);
+}
+
+.font-size-lg {
+  font-size: var(--font-size-lg);
+}
+
+.font-size-xl {
+  font-size: var(--font-size-xl);
+}
+
+.matrixit-segmented.ant-segmented {
+  padding: 4px;
+  background: var(--secondary-bg);
+  border-radius: 9999px;
+  width: fit-content;
+}
+
+.matrixit-segmented .ant-segmented-thumb {
+  border-radius: 9999px !important;
+}
+
+.matrixit-segmented .ant-segmented-item {
+  border-radius: 9999px;
+}
+
+.matrixit-segmented.ant-segmented .ant-segmented-item-label {
+  display: block;
+  text-align: center;
+  white-space: nowrap;
+  position: relative;
+  font-weight: 500;
+  font-size: var(--font-size-lg);
+  padding: 0 12px;
+  height: 32px;
+  line-height: 32px;
+}
+
+.matrixit-segmented .ant-segmented-item-label::after {
+  content: attr(title);
+  font-weight: 700;
+  white-space: nowrap;
+  visibility: hidden;
+  pointer-events: none;
+  display: block;
+  height: 0;
+  overflow: hidden;
+}
+
+.matrixit-segmented .ant-segmented-item-selected {
+  background: var(--surface-bg);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.matrixit-segmented .ant-segmented-item-selected .ant-segmented-item-label {
+  font-weight: 700;
+  color: var(--primary-color);
+}

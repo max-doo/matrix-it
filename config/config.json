@@ -1,0 +1,190 @@
+{
+  "feishu": {
+    "app_id": "",
+    "app_secret": "",
+    "bitable_url": ""
+  },
+  "fields": {
+    "analysis_fields": {
+      "bib_type": {
+        "description": "根据文献的内容判断文献的类型，如：研究论文、方法论论文、综述论文、案例研究、研究报告、行业指南等",
+        "name": "文献类型",
+        "rule": "A",
+        "type": "select"
+      },
+      "contribution": {
+        "description": "本文对该领域最重要的理论、方法或实践贡献是什么？(引用必须紧跟在每个要点之后)",
+        "name": "贡献",
+        "rule": "A",
+        "type": "string"
+      },
+      "highlights": {
+        "description": "论文的优点和创新之处（以资深领域专家的口吻）",
+        "name": "亮点",
+        "rule": "B",
+        "type": "string"
+      },
+      "inspiration": {
+        "description": "以独立视角分析这篇文章在理论、方法、选题等方面可能带来的具体启发，并设想未来可能的研究方向",
+        "name": "启发",
+        "rule": "B",
+        "type": "string"
+      },
+      "key_findings": {
+        "description": "较详细地说明其最核心的理论/方法论/发现。(引用必须紧跟在每个要点之后)",
+        "name": "关键发现",
+        "rule": "A",
+        "type": "string"
+      },
+      "key_word": {
+        "description": "提取论文的关键词（如为英文须翻译成中文，专用缩写除外），用逗号隔开",
+        "name": "关键词",
+        "rule": "A",
+        "type": "multi_select"
+      },
+      "limitations": {
+        "description": "作为顶级的同行评审专家，不仅要总结作者自己承认的局限（需引用原文），还必须独立找出原文中未提及的深层问题",
+        "name": "局限",
+        "rule": "B",
+        "type": "string"
+      },
+      "logic": {
+        "description": "文章用怎样的逻辑来论证其论点？(引用必须紧跟在每个要点之后)",
+        "name": "论证逻辑",
+        "rule": "A",
+        "type": "string"
+      },
+      "methods": {
+        "description": "简明扼要地描述研究范式、对象、工具和分析方法(引用必须紧跟在每个要点之后)",
+        "name": "研究方法",
+        "rule": "A",
+        "type": "string"
+      },
+      "research_question": {
+        "description": "这篇文章试图回答的核心问题是什么？或要实现的主要目标是什么？(引用必须紧跟在每个要点之后)",
+        "name": "研究问题",
+        "rule": "A",
+        "type": "string"
+      },
+      "tldr": {
+        "description": "高度准确概括文献的主要内容",
+        "name": "TLDR",
+        "rule": "A",
+        "type": "string"
+      }
+    },
+    "attachment_fields": {
+      "attachment": {
+        "description": "pdf文件",
+        "name": "附件",
+        "type": "file"
+      }
+    },
+    "meta_fields": {
+      "abstract": {
+        "name": "摘要",
+        "type": "string"
+      },
+      "author": {
+        "name": "作者",
+        "type": "string"
+      },
+      "citation": {
+        "name": "引用格式",
+        "type": "string"
+      },
+      "collections": {
+        "name": "集合",
+        "type": "multi_select"
+      },
+      "doi": {
+        "name": "DOI",
+        "type": "string"
+      },
+      "publications": {
+        "name": "出版物",
+        "type": "string"
+      },
+      "title": {
+        "name": "标题",
+        "type": "string"
+      },
+      "type": {
+        "name": "类型",
+        "type": "select"
+      },
+      "url": {
+        "name": "URL",
+        "type": "string"
+      },
+      "year": {
+        "name": "年份",
+        "type": "number"
+      }
+    }
+  },
+  "llm": {
+    "api_key": "",
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "max_input_chars": 12000,
+    "max_pdf_bytes": 100000,
+    "model": "qwen-flash",
+    "multimodal": false,
+    "temperature": 0.7
+  },
+  "ui": {
+    "debug_llm": true,
+    "table_columns": {
+      "matrix": {
+        "analysis": {
+          "visible": [
+            "tldr",
+            "key_word",
+            "bib_type",
+            "research_question",
+            "methods",
+            "logic",
+            "key_findings",
+            "contribution",
+            "highlights",
+            "inspiration",
+            "limitations"
+          ]
+        },
+        "meta": {
+          "hidden": [
+            "doi",
+            "collections",
+            "abstract"
+          ],
+          "order": [
+            "title",
+            "citation",
+            "year",
+            "url",
+            "author",
+            "type",
+            "publications",
+            "abstract",
+            "doi",
+            "collections"
+          ]
+        }
+      },
+      "zotero": {
+        "meta": {
+          "visible": [
+            "title",
+            "author",
+            "year",
+            "type",
+            "publications"
+          ]
+        }
+      }
+    }
+  },
+  "zotero": {
+    "data_dir": ""
+  }
+}

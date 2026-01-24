@@ -1,0 +1,47 @@
+# General
+.DS_Store
+Thumbs.db
+*.log
+tmp-load.*
+.vercel/
+.idea/
+.vscode/
+
+# Dependencies
+node_modules/
+.venv/
+env/
+venv/
+frontend/node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+
+# Project Data (Ignored)
+data/*.db
+*.sqlite
+*.sqlite3
+pdfs/
+literature.json
+api key.md
+*.db
+
+# Config (Secrets)
+.env
+.env.*
+!.env.example
+config.local.json
+config/config.local.json
+
+# Build Artifacts
+dist/
+build/
+frontend/dist/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/pyi-build/
+src-tauri/binaries/pyi-spec/
+src-tauri/binaries/*.exe
