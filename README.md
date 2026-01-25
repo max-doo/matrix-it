@@ -192,16 +192,21 @@ npm run dev
 2) 确保存在 sidecar 可执行文件：
 
 - Tauri v2 运行/调试侧会在 `src-tauri/binaries/` 下寻找 `matrixit-sidecar-<target-triple>.exe`（Windows）
-- 建议使用 spec 并指定输出目录，避免在仓库根目录生成 `dist/`、`build/`：
+
+**推荐方式（使用构建脚本）：**
 
 ```powershell
-pyinstaller -y `
-  --distpath src-tauri/binaries `
-  --workpath src-tauri/binaries/pyi-build `
-  src-tauri/binaries/pyi-spec/matrixit-sidecar-x86_64-pc-windows-msvc.spec
+.\scripts\build_sidecar.ps1
 ```
 
-- 说明：该 spec 已包含 CSL 引擎所需的 `citeproc/citeproc_styles` 资源文件收集；若新增/更新相关依赖，需重新执行一次打包以生效。
+**手动构建（使用 spec 文件）：**
+
+```powershell
+.venv\Scripts\pyinstaller.exe src-tauri\binaries\pyi-spec\matrixit-sidecar-x86_64-pc-windows-msvc.spec
+```
+
+> **注意**：spec 文件已包含 CSL 引擎（`citeproc`/`citeproc_styles`）和提示词模板（`backend/docs/prompts.md`）的资源收集配置。
+> 若新增/更新相关依赖或提示词，需重新执行构建以生效。
 
 3) 启动 Tauri：
 
