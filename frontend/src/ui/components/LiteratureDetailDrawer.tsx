@@ -4,10 +4,11 @@
  *           支持在 Matrix 视图下编辑分析字段，并提供上下篇切换导航。
  */
 import { CloseOutlined, LeftOutlined, ReadOutlined, RightOutlined } from '@ant-design/icons'
-import { Button, Descriptions, Drawer, Modal, Space, Tag, Typography } from 'antd'
+import { App, Button, Descriptions, Drawer, Space, Tag, Typography, Input } from 'antd'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { openExternal } from '../../lib/backend'
 import type { LiteratureItem } from '../../types'
+import { formatAuthor, getLiteratureTypeMeta } from '../utils/ui-formatters'
 
 export type LiteratureDetailDrawerMode = 'zotero' | 'matrix'
 
@@ -45,6 +46,8 @@ export function LiteratureDetailDrawer({
   canPrev,
   canNext,
 }: LiteratureDetailDrawerProps) {
+  const { modal } = App.useApp()
+
   const metaExtra = useMemo(() => {
     const raw = (item as Record<string, unknown> | null)?.meta_extra
     return (raw && typeof raw === 'object') ? (raw as Record<string, unknown>) : {}
@@ -155,9 +158,9 @@ export function LiteratureDetailDrawer({
   const confirmDiscardIfDirty = useCallback(async () => {
     if (!isDirty) return true
     return await new Promise<boolean>((resolve) => {
-      Modal.confirm({
+      modal.confirm({
         title: '放弃未保存更改？',
-        content: '你在解析字段中有未保存的修改。',
+        content: '你在分析字段中有未保存的修改。',
         okText: '放弃更改',
         cancelText: '继续编辑',
         okButtonProps: { danger: true },
@@ -165,7 +168,7 @@ export function LiteratureDetailDrawer({
         onCancel: () => resolve(false),
       })
     })
-  }, [isDirty])
+  }, [isDirty, modal])
 
   /**
    * 保存操作
@@ -294,27 +297,29 @@ export function LiteratureDetailDrawer({
       onClose={requestClose}
       open={!!item}
       closable={false}
-      styles={{ header: { display: 'none' } }}
+      mask={false}
+      rootStyle={{ top: 42, height: 'calc(100% - 42px)' }}
+      styles={{
+        header: { display: 'none' },
+        wrapper: { boxShadow: '-8px 0 24px rgba(0, 0, 0, 0.12)', height: '100%' },
+      }}
     >
       {item ? (
         <div className="flex flex-col h-full min-h-0">
-          <div
-            className="sticky top-0 z-10 bg-white pb-3 pt-1 border-b border-slate-200 select-none"
-            data-tauri-drag-region
-          >
+          <div className="sticky top-0 z-10 bg-white pb-3 pt-1 border-b border-slate-200 select-none">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 min-w-0">
                 <Button type="text" icon={<CloseOutlined />} onClick={requestClose} aria-label="关闭" />
                 <Space.Compact>
                   <Button
-                    type="default"
+                    type="text"
                     icon={<LeftOutlined />}
                     onClick={requestPrev}
                     disabled={!onPrev || canPrev === false}
                     aria-label="上一条"
                   />
                   <Button
-                    type="default"
+                    type="text"
                     icon={<RightOutlined />}
                     onClick={requestNext}
                     disabled={!onNext || canNext === false}
@@ -323,7 +328,15 @@ export function LiteratureDetailDrawer({
                 </Space.Compact>
               </div>
               <div className="flex items-center gap-2">
-                {mode === 'zotero' && onSwitchMode ? <Button onClick={() => requestSwitchMode('matrix')}>查看矩阵解析</Button> : null}
+                {mode === 'zotero' && onSwitchMode ? (
+                  <Button
+                    onClick={() => requestSwitchMode('matrix')}
+                    disabled={item.processed_status !== 'done'}
+                    title={item.processed_status !== 'done' ? '该文献尚未完成矩阵分析' : ''}
+                  >
+                    {item.processed_status !== 'done' ? '未分析' : '查看矩阵分析'}
+                  </Button>
+                ) : null}
                 <Button
                   icon={<ReadOutlined />}
                   onClick={() => {
@@ -339,9 +352,9 @@ export function LiteratureDetailDrawer({
                     {isEditing ? (
                       <>
                         <Button
-                          onClick={async () => {
-                            const ok = await confirmDiscardIfDirty()
-                            if (!ok) return
+                          disabled={saving}
+                          onClick={() => {
+                            // 直接取消编辑，恢复快照，不需要确认弹窗
                             setDraft(snapshot)
                             setIsEditing(false)
                           }}
@@ -371,7 +384,7 @@ export function LiteratureDetailDrawer({
                     {item.title || '详情'}
                   </Typography.Title>
                   <div className="text-sm text-slate-600 flex flex-wrap gap-x-2 gap-y-1">
-                    <span>{toText(item.author) || '（未知作者）'}</span>
+                    <span>{formatAuthor(item.author) || '（未知作者）'}</span>
                     <span className="text-slate-400">·</span>
                     <span>{toText(item.year) || '（未知年份）'}</span>
                     <span className="text-slate-400">·</span>
@@ -379,7 +392,14 @@ export function LiteratureDetailDrawer({
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-medium text-slate-600">文献类型</span>
-                    <Tag className="m-0 max-w-full !whitespace-normal break-words">{zoteroType || '-'}</Tag>
+                    {(() => {
+                      const meta = getLiteratureTypeMeta(zoteroType)
+                      return (
+                        <Tag color={meta.color} bordered={false} className="m-0 max-w-full !whitespace-normal break-words">
+                          {meta.label}
+                        </Tag>
+                      )
+                    })()}
                     <Tag color="cyan" className="m-0 max-w-full !whitespace-normal break-words">
                       {llmBibTypeDisplay || '-'}
                     </Tag>
@@ -402,7 +422,7 @@ export function LiteratureDetailDrawer({
                       disabled={!onSwitchMode}
                       onClick={() => requestSwitchMode('zotero')}
                     >
-                      查看详情
+                      查看详情&gt;&gt;
                     </Button>
                   </div>
                 </div>
@@ -495,12 +515,43 @@ export function LiteratureDetailDrawer({
                   bordered
                   className="[&_.ant-descriptions-view>table]:table-fixed [&_.ant-descriptions-view>table]:w-full [&_.ant-descriptions-item-content]:min-w-0 [&_.ant-descriptions-item-content]:break-words [&_.ant-descriptions-item-content]:!whitespace-normal"
                 >
-                  <Descriptions.Item label="作者">{toText(item.author) || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="作者">{formatAuthor(item.author) || '-'}</Descriptions.Item>
                   <Descriptions.Item label="年份">{toText(item.year) || '-'}</Descriptions.Item>
-                  <Descriptions.Item label="类型">{zoteroType || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="类型">
+                    {(() => {
+                      const meta = getLiteratureTypeMeta(zoteroType)
+                      return <Tag color={meta.color} bordered={false}>{meta.label}</Tag>
+                    })()}
+                  </Descriptions.Item>
                   <Descriptions.Item label="出版物">{toText((item as Record<string, unknown>).publications)}</Descriptions.Item>
                   <Descriptions.Item label="摘要">
                     {abstract ? <div className="break-words whitespace-pre-wrap [overflow-wrap:anywhere]">{abstract}</div> : <span className="secondary-color">-</span>}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Zotero 标签">
+                    {tags.length > 0 ? (
+                      <div className="flex flex-wrap gap-1 min-w-0">
+                        {tags.map((t) => (
+                          <Tag key={t} className="max-w-full !whitespace-normal break-words">
+                            {t}
+                          </Tag>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="secondary-color">-</span>
+                    )}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="集合">
+                    {collections.length > 0 ? (
+                      <div className="flex flex-wrap gap-1 min-w-0">
+                        {collections.map((p) => (
+                          <Tag key={p} className="max-w-full !whitespace-normal break-words">
+                            {p}
+                          </Tag>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="secondary-color">-</span>
+                    )}
                   </Descriptions.Item>
                   <Descriptions.Item label="日期">{toText(metaExtra.date)}</Descriptions.Item>
                   <Descriptions.Item label="卷/期/页">
@@ -554,32 +605,7 @@ export function LiteratureDetailDrawer({
                       <div className="break-words whitespace-pre-wrap [overflow-wrap:anywhere]">{citationUi.text}</div>
                     )}
                   </Descriptions.Item>
-                  <Descriptions.Item label="Zotero 标签">
-                    {tags.length > 0 ? (
-                      <div className="flex flex-wrap gap-1 min-w-0">
-                        {tags.map((t) => (
-                          <Tag key={t} className="max-w-full !whitespace-normal break-words">
-                            {t}
-                          </Tag>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="secondary-color">-</span>
-                    )}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="集合">
-                    {collections.length > 0 ? (
-                      <div className="flex flex-wrap gap-1 min-w-0">
-                        {collections.map((p) => (
-                          <Tag key={p} className="max-w-full !whitespace-normal break-words">
-                            {p}
-                          </Tag>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="secondary-color">-</span>
-                    )}
-                  </Descriptions.Item>
+
                 </Descriptions>
               </>
             )}
@@ -594,11 +620,12 @@ function Field({ label, value, onChange, disabled }: { label: string; value: str
   return (
     <div className="flex flex-col gap-1">
       <label className="text-sm font-medium text-slate-700">{label}</label>
-      <textarea
-        className="w-full p-2 border border-slate-200 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0abab5] min-h-[96px] disabled:bg-slate-50 disabled:text-slate-500"
+      <Input.TextArea
+        className="!border-slate-200 focus:!border-[#0abab5] min-h-[96px] disabled:bg-slate-50 disabled:text-slate-500"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
+        autoSize
       />
     </div>
   )

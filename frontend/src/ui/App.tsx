@@ -26,21 +26,14 @@ import {
   StopOutlined,
 } from '@ant-design/icons'
 import { homeDir } from '@tauri-apps/api/path'
-import { listen } from '@tauri-apps/api/event'
+
 import zhCN from 'antd/locale/zh_CN'
 
-import type { AnalysisEvent, CollectionNode, FilterMode, LiteratureItem } from '../types'
+import type { AnalysisFieldRow, CollectionNode, FilterMode, LiteratureItem } from '../types'
 import {
-  loadLibrary,
-  formatCitations,
-  startAnalysis as startAnalysisRpc,
-  stopAnalysis as stopAnalysisRpc,
-  deleteExtractedData as deleteExtractedDataRpc,
   updateItem as updateItemRpc,
   readConfig,
   saveConfig,
-  startZoteroWatch,
-  stopZoteroWatch,
 } from '../lib/backend'
 import { AppSidebar, ZoteroStatusFooter } from './components/AppSidebar'
 import { LiteratureTable, type LiteratureTableColumnOption, type LiteratureTableView } from './components/LiteratureTable'
@@ -50,6 +43,30 @@ import { ColumnSettingsPopover } from './components/ColumnSettingsPopover'
 import { LiteratureFilterPopover } from './components/LiteratureFilterPopover'
 import { LiteratureDetailDrawer, type LiteratureDetailDrawerMode } from './components/LiteratureDetailDrawer'
 import { ConfirmModal } from './components/ConfirmModal'
+
+// --- Filter Hooks: 筛选状态管理 ---
+import { useFilterState, useCollectionItems, useFilteredItems, useFilterOptions } from './hooks/useFilterState'
+
+// --- Citation Hooks: 引用生成与管理 ---
+import { useCitationManager } from './hooks/useCitationManager'
+
+// --- Column Hooks: 表格列配置管理 ---
+import { useColumnConfig } from './hooks/useColumnConfig'
+
+// --- Analysis Hooks: AI 分析流程状态 ---
+import { useAnalysisState } from './hooks/useAnalysisState'
+
+// --- Library Hooks: 文献库核心数据 ---
+import { useLibraryState, useZoteroWatch } from './hooks/useLibraryState'
+
+// --- Theme Hooks: 主题样式 ---
+import { useAppTheme } from './hooks/useAppTheme'
+
+// --- Config Hooks: 应用配置与表单 ---
+import { useAppConfig } from './hooks/useAppConfig'
+
+// --- Navigation Hooks: 详情页导航 ---
+import { useDetailNavigation } from './hooks/useDetailNavigation'
 
 const { Sider, Content } = Layout
 
@@ -129,79 +146,39 @@ const collectCollectionKeys = (nodes: CollectionNode[]): Set<string> => {
   return out
 }
 
-type LibraryState = {
-  collections: CollectionNode[]
-  items: LiteratureItem[]
-}
 
-type AnalysisFieldRow = {
-  key: string
-  description?: string
-  type?: string
-  rule?: string
-  name?: string
-}
+
+
 
 export default function App() {
-  /**
-   * 工具函数：从 CSS 变量读取当前主题配置
-   * 用于确保 Ant Design 组件的主题与全局 CSS 变量保持同步（特别是颜色和圆角）。
-   */
-  const readThemeToken = () => {
-    try {
-      const styles = getComputedStyle(document.documentElement)
-      const primary = styles.getPropertyValue('--primary-color').trim() || '#0abab5'
-      const text = styles.getPropertyValue('--text-color').trim() || '#0f172a'
-      const textSecondary = styles.getPropertyValue('--text-secondary-color').trim() || '#475569'
-      const appBg = styles.getPropertyValue('--app-bg').trim() || '#f5f7fa'
-      const secondaryBg = styles.getPropertyValue('--secondary-bg').trim() || '#f1f5f9'
-      const fontSizeStr = styles.getPropertyValue('--font-size-base').trim()
-      const radiusStr = styles.getPropertyValue('--radius-base').trim()
-      const fontSize = Number.parseInt(fontSizeStr.replace('px', ''), 10)
-      const borderRadius = Number.parseInt(radiusStr.replace('px', ''), 10)
+  // --- Refs ---
+  // 用于在不触发重渲染的情况下在不同 Hooks 间共享分析状态
+  const analysisInProgressRef = useRef(false)
 
-      return {
-        colorPrimary: primary,
-        colorText: text,
-        colorTextSecondary: textSecondary,
-        bodyBg: appBg,
-        siderBg: appBg,
-        segmentedTrackBg: secondaryBg,
-        fontSize: Number.isFinite(fontSize) ? fontSize : 14,
-        borderRadius: Number.isFinite(borderRadius) ? borderRadius : 8,
-      }
-    } catch {
-      return {
-        colorPrimary: '#0abab5',
-        colorText: '#0f172a',
-        colorTextSecondary: '#475569',
-        bodyBg: '#f5f7fa',
-        siderBg: '#f5f7fa',
-        segmentedTrackBg: '#f1f5f9',
-        fontSize: 14,
-        borderRadius: 8,
-      }
-    }
-  }
+  // --- Core State: 文献库 ---
+  // 管理核心的文献列表、集合结构以及加载/刷新逻辑
+  const {
+    library,
+    setLibrary,
+    refreshingLibrary,
+    refreshError,
+    lastRefreshAt,
+    handleRefresh, // 触发刷新的主函数
+    refreshLibrary // 暴露给副作用使用的刷新函数
+  } = useLibraryState(analysisInProgressRef)
 
-  // --- 状态定义：文献库与核心数据 ---
-  /**
-   * 当前加载的文献库数据（包含所有集合与文献条目）
-   * 初始化时尝试从 LocalStorage 缓存恢复，随后会自动触发 refreshLibrary 更新。
-   */
-  const [library, setLibrary] = useState<LibraryState>(() => {
-    const cached = readLibraryCache()
-    return cached ? { collections: cached.collections, items: cached.items } : { collections: [], items: [] }
-  })
-  // --- 状态定义：UI 交互与筛选 ---
+  // --- UI State: 视图与选择 ---
+  // 控制当前视图（Zotero列表 vs 矩阵视图）以及各视图下的选中项
   const [activeView, setActiveView] = useState(() => readString(ACTIVE_VIEW_KEY) ?? 'zotero')
   const [zoteroSelectedRowKeys, setZoteroSelectedRowKeys] = useState<React.Key[]>([])
   const [matrixSelectedRowKeys, setMatrixSelectedRowKeys] = useState<React.Key[]>([])
 
+  // 计算当前视图下的选中项
   const selectedRowKeys = useMemo(() => {
     return activeView === 'matrix' ? matrixSelectedRowKeys : zoteroSelectedRowKeys
   }, [activeView, matrixSelectedRowKeys, zoteroSelectedRowKeys])
 
+  // 更新选中项的包装函数
   const setSelectedRowKeys = useCallback((keys: React.Key[]) => {
     if (activeView === 'matrix') {
       setMatrixSelectedRowKeys(keys)
@@ -211,422 +188,150 @@ export default function App() {
   }, [activeView])
 
   const [activeCollectionKey, setActiveCollectionKey] = useState<string | null>(() => readString(ACTIVE_COLLECTION_KEY))
-  const [activeItemKey, setActiveItemKey] = useState<string | null>(null)
-  // 初始化 filterMode 时需考虑 activeView 从 localStorage 恢复的情况：
-  // 若初始视图为 matrix，则筛选模式应为 processed（仅显示已处理文献）
-  const [filterMode, setFilterMode] = useState<FilterMode>(() =>
-    (readString(ACTIVE_VIEW_KEY) ?? 'zotero') === 'matrix' ? 'processed' : 'all'
-  )
-  const zoteroFilterModeRef = useRef<FilterMode>('all')
-  const [filterPopoverOpen, setFilterPopoverOpen] = useState(false)
-  // 合并筛选状态为单个对象，减少状态更新时的重渲染次数
-  const [fieldFilter, setFieldFilter] = useState<{
-    match: 'all' | 'any'
-    yearOp: 'eq' | 'gt' | 'lt'
-    year: string
-    type: string
-    publications: string
-  }>({ match: 'all', yearOp: 'eq', year: '', type: '', publications: '' })
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searchPopoverOpen, setSearchPopoverOpen] = useState(false)
   const [columnsPopoverOpen, setColumnsPopoverOpen] = useState(false)
-  const searchInputElRef = useRef<HTMLInputElement | null>(null)
+
+  // --- Filter State: 筛选与搜索 ---
+  // 管理侧边栏筛选、顶部搜索框以及高级筛选面板的状态
+  const {
+    filterMode,
+    setFilterMode,
+    zoteroFilterModeRef,
+    filterPopoverOpen,
+    setFilterPopoverOpen,
+    fieldFilter,
+    setFieldFilter,
+    searchQuery,
+    setSearchQuery,
+    normalizedSearchQuery,
+    searchPopoverOpen,
+    setSearchPopoverOpen,
+    searchInputElRef,
+  } = useFilterState(activeView)
 
   const [mode, setMode] = useState<'workbench' | 'settings'>('workbench')
-  const [settingsSection, setSettingsSection] = useState<SettingsSectionKey>('zotero')
-  const [settingsLoading, setSettingsLoading] = useState(false)
-  const [settingsSaving, setSettingsSaving] = useState(false)
 
-  const [deletingExtracted, setDeletingExtracted] = useState(false)
-  const [analysisInProgress, setAnalysisInProgress] = useState(false)
-  const [stoppingAnalysis, setStoppingAnalysis] = useState(false)
-  const [confirmModal, setConfirmModal] = useState<{ open: boolean; type: 'delete' | 'analyze' | 'stop' | 'mixed_analyze' }>({ open: false, type: 'delete' })
-  const [rawConfig, setRawConfig] = useState<Record<string, unknown>>({})
-  const [rawFields, setRawFields] = useState<Record<string, unknown>>({})
-  const [configForm] = Form.useForm()
-  const [fieldsForm] = Form.useForm()
-  const settingsScrollApiRef = useRef<SettingsScrollApi | null>(null)
-  const settingsHydratingRef = useRef(false)
-  const autoSaveTimerRef = useRef<number | null>(null)
-  const [zoteroStatus, setZoteroStatus] = useState<{ path: string; connected: boolean }>({ path: '未配置', connected: false })
-  const [themeToken, setThemeToken] = useState<{
-    colorPrimary: string
-    colorText: string
-    colorTextSecondary: string
-    bodyBg: string
-    siderBg: string
-    segmentedTrackBg: string
-    fontSize: number
-    borderRadius: number
-  }>(readThemeToken)
+  // --- Config State: 配置管理 ---
+  // 负责应用配置的读取、保存、表单绑定以及设置页面的各个部分
+  const {
+    rawConfig,
+    setRawConfig,
+    configForm,
+    fieldsForm,
+    settingsScrollApiRef,
+    zoteroStatus,
+    settingsSection,
+    setSettingsSection,
+    settingsLoading,
+    settingsSaving,
+    scheduleAutoSaveSettings,
+    loadSettings,
+    metaFieldDefs,
+    analysisFieldDefs
+  } = useAppConfig(mode)
 
-  const [refreshingLibrary, setRefreshingLibrary] = useState(false)
-  const [refreshError, setRefreshError] = useState<string | null>(null)
-  const [lastRefreshAt, setLastRefreshAt] = useState<number | null>(() => readLibraryCache()?.savedAt ?? null)
+  // --- Theme State: 主题 ---
+  // 根据搜索状态动态调整主题样式（如搜索激活时的高亮）
+  const { themeToken, activeSearchButtonStyle } = useAppTheme(normalizedSearchQuery)
+
   const [currentPageRows, setCurrentPageRows] = useState<LiteratureItem[]>([])
-  const [detailCitationState, setDetailCitationState] = useState<{ loading: boolean; error: string | null }>({ loading: false, error: null })
   const [detailMode, setDetailMode] = useState<LiteratureDetailDrawerMode>(() => (readString(ACTIVE_VIEW_KEY) ?? 'zotero') === 'matrix' ? 'matrix' : 'zotero')
 
-  const citationCacheRef = useRef<Map<string, { dateModified: unknown; text: string }>>(new Map())
-  const citationsInFlightRef = useRef<Set<string>>(new Set())
-  const analysisInProgressRef = useRef(false)
-  const [citationsTick, setCitationsTick] = useState(0)
+  // --- Citation State: 引用生成 ---
+  // 管理文献引用的异步生成、缓存及状态更新
+  const {
+    citationsTick,
+    detailCitationState,
+    setDetailCitationState,
+    citationCacheRef,
+    citationsInFlightRef,
+    ensureCitations,
+  } = useCitationManager(library, setLibrary)
 
-  // --- Memo：配置解析 ---
-  /**
-   * 当前生效的字段定义
-   * 优先使用后端返回的配置（rawConfig），兜底使用本地解析的配置（rawFields）。
-   */
-  const fieldsDef = useMemo(() => {
-    const fromCfg = rawConfig.fields
-    if (fromCfg && typeof fromCfg === 'object') return fromCfg as Record<string, unknown>
-    return rawFields
-  }, [rawConfig.fields, rawFields])
+  // --- Computed Data: 筛选与排序结果 ---
 
-  const metaFieldDefs = useMemo(
-    () => ((fieldsDef.meta_fields as Record<string, unknown>) ?? {}) as Record<string, unknown>,
-    [fieldsDef.meta_fields]
+  // 1. 根据当前选中的集合（Collection）获取基础文献列表
+  const collectionItems = useCollectionItems(library, activeCollectionKey)
+
+  // 2. 根据当前列表内容生成可用的筛选项（如存在的年份、标签等）
+  const {
+    filterYearOptions,
+    filterTypeOptions,
+    filterTagOptions,
+    filterKeywordOptions,
+    filterBibTypeOptions
+  } = useFilterOptions(collectionItems)
+
+  // 3. 应用所有筛选条件（状态、字段、搜索关键词）得到最终展示列表
+  const filteredItems = useFilteredItems(
+    collectionItems,
+    filterMode,
+    fieldFilter,
+    normalizedSearchQuery
   )
 
-  const analysisFieldDefs = useMemo(
-    () => ((fieldsDef.analysis_fields as Record<string, unknown>) ?? {}) as Record<string, unknown>,
-    [fieldsDef.analysis_fields]
+  // 4. 维护排序后的列表，用于详情页的前后条目导航
+  const [sortedItems, setSortedItems] = useState<LiteratureItem[]>([])
+  const navigationItems = sortedItems.length > 0 ? sortedItems : filteredItems
+
+  // --- Detail Navigation: 详情页控制 ---
+  // 处理详情抽屉的打开/关闭以及条目切换逻辑
+  const {
+    activeItemKey,
+    setActiveItemKey,
+    activeItem,
+    canPrevDetail,
+    canNextDetail,
+    goPrevDetail,
+    goNextDetail
+  } = useDetailNavigation(library, navigationItems)
+
+  // --- Columns Config: 列显示配置 ---
+  // 计算表格需要显示的列（元数据列 + 分析字段列）
+  const {
+    metaColumnPanel,
+    analysisColumnPanel,
+    tableMetaColumns,
+    tableAnalysisColumns,
+    applyMetaPanelChange,
+    applyAnalysisPanelChange,
+    matrixAnalysisOrder,
+    getFieldName,
+  } = useColumnConfig(
+    rawConfig,
+    setRawConfig,
+    metaFieldDefs,
+    analysisFieldDefs,
+    activeView
   )
-
-  /**
-   * UI 列显示配置
-   * 从全局配置中提取表格列的显示/隐藏/排序设置。
-   */
-  const uiTableColumns = useMemo(() => {
-    const ui = rawConfig.ui
-    if (ui && typeof ui === 'object' && (ui as Record<string, unknown>).table_columns) {
-      return (ui as Record<string, unknown>).table_columns as Record<string, unknown>
-    }
-    return {}
-  }, [rawConfig.ui])
-
-  const getFieldName = useCallback((defs: Record<string, unknown>, key: string) => {
-    const def = (defs[key] ?? {}) as Record<string, unknown>
-    const name = typeof def.name === 'string' ? def.name.trim() : ''
-    return name.length > 0 ? name : key
-  }, [])
-
-  /**
-   * 核心操作：保存列配置
-   *将当前的列显示状态（metaVisible / analysisVisible）持久化到后端配置中。
-   */
-  const saveTableColumnsUi = useCallback(
-    async (next: { metaVisible?: string[]; analysisVisible?: string[] }) => {
-      const ui = ((rawConfig.ui as Record<string, unknown>) ?? {}) as Record<string, unknown>
-      const tableColumns = ((ui.table_columns as Record<string, unknown>) ?? {}) as Record<string, unknown>
-      const zoteroUi = ((tableColumns.zotero as Record<string, unknown>) ?? {}) as Record<string, unknown>
-      const matrixUi = ((tableColumns.matrix as Record<string, unknown>) ?? {}) as Record<string, unknown>
-
-      const nextZotero =
-        next.metaVisible && activeView === 'zotero'
-          ? {
-            ...zoteroUi,
-            meta: { visible: next.metaVisible },
-          }
-          : zoteroUi
-
-      const nextMatrix = {
-        ...matrixUi,
-        ...(next.metaVisible && activeView === 'matrix'
-          ? {
-            meta: { visible: next.metaVisible },
-          }
-          : {}),
-        ...(next.analysisVisible
-          ? {
-            analysis: { visible: next.analysisVisible },
-          }
-          : {}),
-      }
-
-      const nextConfig: Record<string, unknown> = {
-        ...rawConfig,
-        ui: {
-          ...ui,
-          table_columns: {
-            ...tableColumns,
-            zotero: nextZotero,
-            matrix: nextMatrix,
-          },
-        },
-      }
-
-      const res = await saveConfig(nextConfig)
-      if (!res.saved) {
-        message.error('保存失败：请检查运行环境与文件权限')
-        return
-      }
-      setRawConfig(nextConfig)
-    },
-    [activeView, rawConfig]
-  )
-
-  const readVisibleKeys = useCallback(
-    (uiObj: Record<string, unknown>, allKeys: string[], defaultVisible: string[], requireTitle: boolean) => {
-      const normalizedDefault = requireTitle
-        ? ['title', ...defaultVisible.filter((k) => allKeys.includes(k) && k !== 'title')]
-        : defaultVisible.filter((k) => allKeys.includes(k))
-
-      const visibleRaw = uiObj.visible
-      if (Array.isArray(visibleRaw)) {
-        const v = (visibleRaw as unknown[])
-          .map((x) => (typeof x === 'string' ? x : ''))
-          .map((s) => s.trim())
-          .filter((k) => k && allKeys.includes(k))
-        const uniq: string[] = []
-        for (const k of v) if (!uniq.includes(k)) uniq.push(k)
-        if (requireTitle && !uniq.includes('title')) uniq.unshift('title')
-        return uniq
-      }
-
-      const orderRaw = uiObj.order
-      const hiddenRaw = uiObj.hidden
-      const order = Array.isArray(orderRaw) ? (orderRaw as string[]).filter((k) => allKeys.includes(k)) : allKeys
-      const hidden = new Set(Array.isArray(hiddenRaw) ? (hiddenRaw as string[]).filter((k) => allKeys.includes(k)) : [])
-      hidden.delete('title')
-      const mergedOrder = [...order, ...allKeys.filter((k) => !order.includes(k))]
-      const fromLegacy = requireTitle
-        ? ['title', ...mergedOrder.filter((k) => k !== 'title' && !hidden.has(k))]
-        : mergedOrder.filter((k) => !hidden.has(k))
-      if (fromLegacy.length > 0) return fromLegacy
-
-      return normalizedDefault
-    },
-    []
-  )
-
-  const matrixAnalysisOrder = useMemo(() => {
-    const allKeys = Object.keys(analysisFieldDefs)
-    const matrixUi = (uiTableColumns.matrix as Record<string, unknown>) ?? {}
-    const analysisUi = (matrixUi.analysis as Record<string, unknown>) ?? {}
-    const visible = readVisibleKeys(analysisUi, allKeys, allKeys, false)
-    const orderRaw = analysisUi.order
-    const order = Array.isArray(orderRaw)
-      ? (orderRaw as unknown[])
-        .map((x) => String(x || '').trim())
-        .filter((k) => k.length > 0 && allKeys.includes(k))
-      : allKeys
-    const orderedAll = [...order, ...allKeys.filter((k) => !order.includes(k))]
-    const rest = orderedAll.filter((k) => !visible.includes(k))
-    return [...visible, ...rest]
-  }, [analysisFieldDefs, readVisibleKeys, uiTableColumns.matrix])
-
-  const metaColumnPanel = useMemo(() => {
-    const primaryKeys = ['title', 'author', 'year', 'type', 'publications']
-    const allKeys = primaryKeys.filter((k) => k in metaFieldDefs)
-    const viewUi = (uiTableColumns as Record<string, unknown>)[activeView] as Record<string, unknown> | undefined
-    const metaUi = (viewUi?.meta as Record<string, unknown>) ?? {}
-    const visible = allKeys
-    const hidden = new Set(allKeys.filter((k) => k !== 'title' && !visible.includes(k)))
-    const ordered = visible.filter((k) => k !== 'title')
-    const mergedOrder = [...ordered, ...allKeys.filter((k) => k !== 'title' && !ordered.includes(k))]
-    return { keys: mergedOrder, hidden, allKeys }
-  }, [activeView, metaFieldDefs, readVisibleKeys, uiTableColumns])
-
-  const analysisColumnPanel = useMemo(() => {
-    if (activeView !== 'matrix') return { keys: [] as string[], hidden: new Set<string>(), allKeys: [] as string[] }
-    const allKeys = Object.keys(analysisFieldDefs)
-    const viewUi = (uiTableColumns as Record<string, unknown>)[activeView] as Record<string, unknown> | undefined
-    const analysisUi = (viewUi?.analysis as Record<string, unknown>) ?? {}
-    const visible = readVisibleKeys(analysisUi, allKeys, allKeys, false)
-    const hidden = new Set(allKeys.filter((k) => !visible.includes(k)))
-    const mergedOrder = [...visible, ...allKeys.filter((k) => !visible.includes(k))]
-    return { keys: mergedOrder, hidden, allKeys }
-  }, [activeView, analysisFieldDefs, readVisibleKeys, uiTableColumns])
-
-  const applyMetaPanelChange = useCallback(
-    async (nextKeys: string[], nextHidden: Set<string>) => {
-      const allKeys = metaColumnPanel.allKeys
-      const visible = ['title', ...nextKeys.filter((k) => allKeys.includes(k) && k !== 'title' && !nextHidden.has(k))]
-      await saveTableColumnsUi({ metaVisible: visible })
-    },
-    [metaColumnPanel.allKeys, saveTableColumnsUi]
-  )
-
-  const applyAnalysisPanelChange = useCallback(
-    async (nextKeys: string[], nextHidden: Set<string>) => {
-      const allKeys = analysisColumnPanel.allKeys
-      const visible = nextKeys.filter((k) => allKeys.includes(k) && !nextHidden.has(k))
-      await saveTableColumnsUi({ analysisVisible: visible })
-    },
-    [analysisColumnPanel.allKeys, saveTableColumnsUi]
-  )
-
-  const tableMetaColumns = useMemo<LiteratureTableColumnOption[]>(() => {
-    const primaryKeys = ['title', 'author', 'year', 'type', 'publications']
-    const allKeys = primaryKeys.filter((k) => k in metaFieldDefs)
-    const viewUi = (uiTableColumns as Record<string, unknown>)[activeView] as Record<string, unknown> | undefined
-    const metaUi = (viewUi?.meta as Record<string, unknown>) ?? {}
-    const visible = allKeys
-    return visible
-      .map((key) => {
-        const def = ((metaFieldDefs as Record<string, unknown>)[key] ?? {}) as Record<string, unknown>
-        const label = typeof def.name === 'string' && def.name.trim().length > 0 ? def.name.trim() : key
-        return { key, label }
-      })
-  }, [activeView, metaFieldDefs, readVisibleKeys, uiTableColumns])
-
-  const tableAnalysisColumns = useMemo<LiteratureTableColumnOption[]>(() => {
-    if (activeView !== 'matrix') return []
-    const allKeys = Object.keys(analysisFieldDefs)
-    const viewUi = (uiTableColumns as Record<string, unknown>)[activeView] as Record<string, unknown> | undefined
-    const analysisUi = (viewUi?.analysis as Record<string, unknown>) ?? {}
-    const visible = readVisibleKeys(analysisUi, allKeys, allKeys, false)
-    return visible
-      .map((key) => {
-        const def = ((analysisFieldDefs as Record<string, unknown>)[key] ?? {}) as Record<string, unknown>
-        const label = typeof def.name === 'string' && def.name.trim().length > 0 ? def.name.trim() : key
-        return { key, label }
-      })
-  }, [activeView, analysisFieldDefs, readVisibleKeys, uiTableColumns])
 
   const citationColumnVisible = useMemo(() => tableMetaColumns.some((c) => c.key === 'citation'), [tableMetaColumns])
 
-  // --- 核心操作：数据刷新 ---
-  /**
-   * 刷新文献库数据
-   * 调用后端 loadLibrary 接口，更新本地 state，并写入 LocalStorage 缓存。
-   */
-  const refreshLibrary = useCallback(
-    async (trigger: 'auto' | 'manual') => {
-      const msgKey = 'matrixit.library.refresh'
-      setRefreshingLibrary(true)
-      setRefreshError(null)
-      if (trigger === 'manual') message.destroy(msgKey)
-      try {
-        const next = await loadLibrary()
-        // 刷新时保留前端正在处理的状态（processing/reanalyzing），防止后端旧数据覆盖
-        // 但如果分析已经终止（analysisInProgressRef.current === false），则不保留
-        setLibrary((prev) => {
-          // 如果分析不在进行中，需要清理后端返回的残留 processing 状态（脏数据）
-          if (!analysisInProgressRef.current) {
-            return {
-              ...next,
-              items: next.items.map((it) => {
-                // 将后端残留的 processing 状态清理为 unprocessed
-                if (it.processed_status === 'processing') {
-                  return { ...it, processed_status: 'unprocessed', processed_error: undefined }
-                }
-                // 将后端残留的 reanalyzing 状态恢复为 done
-                if (it.processed_status === 'reanalyzing') {
-                  return { ...it, processed_status: 'done', processed_error: undefined }
-                }
-                return it
-              }),
-            }
-          }
-          // 分析进行中时，保留前端的 processing/reanalyzing 状态
-          const processingKeys = new Map<string, LiteratureItem>()
-          for (const it of prev.items) {
-            if (it.processed_status === 'processing' || it.processed_status === 'reanalyzing') {
-              processingKeys.set(it.item_key, it)
-            }
-          }
-          if (processingKeys.size === 0) {
-            return next
-          }
-          return {
-            ...next,
-            items: next.items.map((it) => {
-              const preserved = processingKeys.get(it.item_key)
-              if (preserved) {
-                // 保留前端的分析状态
-                return { ...it, processed_status: preserved.processed_status, processed_error: preserved.processed_error }
-              }
-              return it
-            }),
-          }
-        })
-        writeLibraryCache({ savedAt: Date.now(), collections: next.collections, items: next.items })
-        setLastRefreshAt(Date.now())
-        const keys = collectCollectionKeys(next.collections)
-        setActiveCollectionKey((prev) => (prev && keys.has(prev) ? prev : null))
-        if (trigger === 'manual') message.success({ content: '数据已更新' })
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : '更新失败'
-        setRefreshError(msg)
-        if (trigger === 'manual') message.error({ content: msg })
-        else message.error(msg)
-      } finally {
-        setRefreshingLibrary(false)
-      }
-    },
-    []
-  )
+  // --- Watcher: 外部状态监听 ---
+  // 监听 Zotero 数据库变化并自动刷新
+  useZoteroWatch(zoteroStatus, refreshLibrary)
 
-  const handleRefresh = useCallback(() => {
-    refreshLibrary('manual')
-  }, [refreshLibrary])
-
-  const applyCitationsToLibrary = useCallback((citations: Record<string, string>) => {
-    const entries = Object.entries(citations).filter(([, v]) => typeof v === 'string' && v.trim().length > 0)
-    if (entries.length === 0) return
-    setLibrary((prev) => {
-      const byKey = new Map(entries)
-      return {
-        ...prev,
-        items: prev.items.map((it) => {
-          const next = byKey.get(it.item_key)
-          if (!next) return it
-          return { ...(it as Record<string, unknown>), citation: next } as unknown as LiteratureItem
-        }),
-      }
-    })
-  }, [])
-
-  const ensureCitations = useCallback(
-    async (itemKeys: string[]) => {
-      const uniq = Array.from(new Set(itemKeys.map((k) => String(k || '').trim()).filter(Boolean)))
-      if (uniq.length === 0) return false
-
-      const byKey = new Map(library.items.map((it) => [it.item_key, it]))
-      const toFetch: string[] = []
-      for (const k of uniq) {
-        if (citationsInFlightRef.current.has(k)) continue
-        const it = byKey.get(k)
-        const dm = (it as unknown as Record<string, unknown> | undefined)?.date_modified
-        const existingText = (it as unknown as Record<string, unknown> | undefined)?.citation
-        if (typeof existingText === 'string' && existingText.trim().length > 0) {
-          citationCacheRef.current.set(k, { dateModified: dm, text: existingText })
-          continue
-        }
-        const cached = citationCacheRef.current.get(k)
-        if (cached && cached.text && cached.dateModified === dm) continue
-        toFetch.push(k)
-      }
-
-      if (toFetch.length === 0) return true
-      for (const k of toFetch) citationsInFlightRef.current.add(k)
-      setCitationsTick((x) => x + 1)
-      try {
-        for (let i = 0; i < toFetch.length; i += 40) {
-          const batch = toFetch.slice(i, i + 40)
-          const res = await formatCitations(batch)
-          const citations = res?.citations ?? {}
-          for (const [k, text] of Object.entries(citations)) {
-            const it = byKey.get(k)
-            const dm = (it as unknown as Record<string, unknown> | undefined)?.date_modified
-            if (typeof text === 'string' && text.trim().length > 0) citationCacheRef.current.set(k, { dateModified: dm, text })
-          }
-          applyCitationsToLibrary(citations)
-        }
-        return true
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : '引用生成失败'
-        setRefreshError(msg)
-        message.error(msg)
-        return false
-      } finally {
-        for (const k of toFetch) citationsInFlightRef.current.delete(k)
-        setCitationsTick((x) => x + 1)
-      }
-    },
-    [applyCitationsToLibrary, formatCitations, library.items]
+  // --- Analysis Logic: 分析执行 ---
+  // 处理“开始分析”、“停止分析”、“删除分析结果”等核心业务逻辑
+  const {
+    analysisInProgress,
+    stoppingAnalysis,
+    deletingExtracted,
+    confirmModal,
+    setConfirmModal,
+    startAnalysis,
+    handleAnalysisRequest,
+    handleStopAnalysisRequest,
+    handleConfirmStopAnalysis,
+    handleConfirmAnalysis,
+    handleDeleteRequest,
+    handleConfirmDelete,
+  } = useAnalysisState(
+    library,
+    setLibrary,
+    selectedRowKeys,
+    setSelectedRowKeys,
+    handleRefresh,
+    analysisInProgressRef
   )
 
   const handleSelectCollection = useCallback((key: string) => {
@@ -634,177 +339,38 @@ export default function App() {
     writeString(ACTIVE_COLLECTION_KEY, key)
   }, [])
 
-  // --- Effect：状态持久化与初始化 ---
+  // --- Effects: 副作用管理 ---
 
-  // 监听 Active View 变化并持久化
+  // 1. 持久化当前视图模式（Zotero/Matrix）
   useEffect(() => {
     writeString(ACTIVE_VIEW_KEY, activeView)
   }, [activeView])
 
   const lastDetailItemKeyRef = useRef<string | null>(null)
 
+  // 2. 管理详情抽屉的模式（编辑模式/查看模式）
+  // 规则：初次打开时根据主视图跟随（Matrix视图->Matrix模式），之后保持用户选择
   useEffect(() => {
-    if (!activeItemKey) {
+    const wasOpen = lastDetailItemKeyRef.current !== null
+    const isOpen = activeItemKey !== null
+
+    if (!isOpen) {
       lastDetailItemKeyRef.current = null
       return
     }
-    if (lastDetailItemKeyRef.current === activeItemKey) return
+
+    if (!wasOpen && isOpen) {
+      setDetailMode(activeView === 'matrix' ? 'matrix' : 'zotero')
+    }
     lastDetailItemKeyRef.current = activeItemKey
-    setDetailMode(activeView === 'matrix' ? 'matrix' : 'zotero')
   }, [activeItemKey, activeView])
 
+  // 3. 校验集合有效性：如果 activeCollectionKey 为空，清理本地存储
   useEffect(() => {
     if (!activeCollectionKey) deleteKey(ACTIVE_COLLECTION_KEY)
   }, [activeCollectionKey])
 
-  useEffect(() => {
-    const cached = readLibraryCache()
-    if (cached) setLastRefreshAt(cached.savedAt)
-    refreshLibrary('auto')
-  }, [refreshLibrary])
-
-  useEffect(() => {
-    // 主题 token 依赖 DOM/CSS 变量：在首次渲染后读取一次，避免 SSR/非浏览器环境报错
-    setThemeToken(readThemeToken())
-  }, [])
-
-  const guessDefaultZoteroDir = useCallback(async () => {
-    try {
-      const hd = await homeDir()
-      const base = String(hd ?? '').replace(/[\\/]+$/, '')
-      if (!base) return ''
-      return `${base}\\Zotero`
-    } catch {
-      return ''
-    }
-  }, [])
-
-  useEffect(() => {
-    readConfig()
-      .then((cfg) => {
-        setRawConfig(cfg)
-        const fds = (cfg.fields as Record<string, unknown>) ?? {}
-        setRawFields(fds)
-        const zoteroCfg = (cfg.zotero as Record<string, unknown>) ?? {}
-        const zoteroDataDir = typeof zoteroCfg.data_dir === 'string' ? zoteroCfg.data_dir : ''
-        setZoteroStatus({ path: zoteroDataDir || '未配置', connected: !!zoteroDataDir })
-      })
-      .catch(() => {
-        return
-      })
-  }, [])
-
-  const zoteroWatchTimerRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    if (!isTauriRuntime()) return
-    if (!zoteroStatus.connected) {
-      void stopZoteroWatch().catch(() => null)
-      return
-    }
-
-    const dataDir = zoteroStatus.path
-    let unlisten: (() => void) | null = null
-
-    startZoteroWatch(dataDir).catch((e) => {
-      const msg = e instanceof Error ? e.message : 'Zotero 监听启动失败'
-      setRefreshError(msg)
-    })
-
-    listen('matrixit://zotero-changed', () => {
-      if (zoteroWatchTimerRef.current) window.clearTimeout(zoteroWatchTimerRef.current)
-      zoteroWatchTimerRef.current = window.setTimeout(() => {
-        zoteroWatchTimerRef.current = null
-        void refreshLibrary('auto')
-      }, 800)
-    })
-      .then((fn) => {
-        unlisten = fn
-      })
-      .catch((e) => {
-        const msg = e instanceof Error ? e.message : 'Zotero 监听订阅失败'
-        setRefreshError(msg)
-      })
-
-    return () => {
-      if (unlisten) unlisten()
-      if (zoteroWatchTimerRef.current) window.clearTimeout(zoteroWatchTimerRef.current)
-      zoteroWatchTimerRef.current = null
-      void stopZoteroWatch().catch(() => null)
-    }
-  }, [refreshLibrary, zoteroStatus.connected, zoteroStatus.path])
-
-  // --- 设置页逻辑 ---
-
-  /**
-   * 加载设置页数据
-   * 读取后端配置，并回填到 Ant Design Form 表单中。
-   */
-  const loadSettings = useCallback(async () => {
-    setSettingsLoading(true)
-    try {
-      const cfg = await readConfig()
-      const fds = (cfg.fields as Record<string, unknown>) ?? {}
-      setRawConfig(cfg)
-      setRawFields(fds)
-      settingsHydratingRef.current = true
-      const zoteroCfg = (cfg.zotero as Record<string, unknown>) ?? {}
-      const zoteroDataDir = typeof zoteroCfg.data_dir === 'string' ? zoteroCfg.data_dir : ''
-      const defaultZoteroDir = zoteroDataDir || (await guessDefaultZoteroDir())
-      configForm.setFieldsValue({
-        ...cfg,
-        zotero: { ...zoteroCfg, data_dir: defaultZoteroDir },
-      })
-      setZoteroStatus({ path: defaultZoteroDir || '未配置', connected: !!defaultZoteroDir })
-      const analysisFields = (fds.analysis_fields as Record<string, unknown>) ?? {}
-      const ui = (cfg.ui as Record<string, unknown>) ?? {}
-      const tableColumns = (ui.table_columns as Record<string, unknown>) ?? {}
-      const matrixUi = (tableColumns.matrix as Record<string, unknown>) ?? {}
-      const analysisUi = (matrixUi.analysis as Record<string, unknown>) ?? {}
-      const orderRaw = analysisUi.order
-
-      const byKey = new Map<string, AnalysisFieldRow>(
-        Object.entries(analysisFields)
-          .map(([k, v]) => {
-            const obj = (v ?? {}) as Record<string, unknown>
-            const row: AnalysisFieldRow = {
-              key: k,
-              description: typeof obj.description === 'string' ? obj.description : '',
-              type: typeof obj.type === 'string' ? obj.type : 'string',
-              rule: typeof obj.rule === 'string' ? obj.rule : '',
-              name:
-                typeof obj.name === 'string'
-                  ? obj.name
-                  : typeof obj.feishu_field === 'string'
-                    ? obj.feishu_field
-                    : '',
-            }
-            return [k, row] as const
-          })
-          .filter(([k]) => k.trim().length > 0)
-      )
-
-      const keys = Array.isArray(orderRaw)
-        ? [...(orderRaw as string[]).filter((k) => byKey.has(k)), ...Array.from(byKey.keys()).filter((k) => !(orderRaw as string[]).includes(k))]
-        : Array.from(byKey.keys())
-
-      const rows: AnalysisFieldRow[] = keys.map((k) => byKey.get(k) as AnalysisFieldRow).filter((r) => r && r.key.trim().length > 0)
-      fieldsForm.setFieldsValue({ analysis_fields: rows })
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : '加载设置失败'
-      message.error(msg)
-    } finally {
-      settingsHydratingRef.current = false
-      setSettingsLoading(false)
-    }
-  }, [configForm, fieldsForm, guessDefaultZoteroDir])
-
-  useEffect(() => {
-    if (mode === 'settings') {
-      loadSettings()
-    }
-  }, [loadSettings, mode])
-
+  // 4. 当离开工作台模式时，关闭所有浮层（搜索框、筛选器）
   useEffect(() => {
     if (mode !== 'workbench') {
       setSearchPopoverOpen(false)
@@ -812,6 +378,7 @@ export default function App() {
     }
   }, [mode])
 
+  // 5. 全局快捷键：Ctrl+F 唤起搜索
   useEffect(() => {
     if (mode !== 'workbench') return
 
@@ -828,165 +395,8 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [mode])
 
-  const normalizedSearchQuery = useMemo(() => {
-    return searchQuery.trim().toLowerCase().replace(/\s+/g, ' ')
-  }, [searchQuery])
-
-  const hexToRgb = (hex: string): { r: number; g: number; b: number } | null => {
-    const raw = hex.trim().replace('#', '')
-    const normalized = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw
-    if (normalized.length !== 6) return null
-    const n = Number.parseInt(normalized, 16)
-    if (!Number.isFinite(n)) return null
-    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
-  }
-
-  const activeSearchButtonStyle = useMemo(() => {
-    if (!normalizedSearchQuery) return undefined
-    const rgb = hexToRgb(themeToken.colorPrimary)
-    if (!rgb) return { backgroundColor: '#f0fdfa', borderColor: '#99f6e4', color: themeToken.colorPrimary } satisfies React.CSSProperties
-    return {
-      backgroundColor: `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.12)`,
-      borderColor: `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.35)`,
-      color: themeToken.colorPrimary,
-    } satisfies React.CSSProperties
-  }, [normalizedSearchQuery, themeToken.colorPrimary])
-
-  const collectionItems = useMemo(() => {
-    return activeCollectionKey
-      ? library.items.filter((it) =>
-        (it.collections ?? []).some((c) => c.key === activeCollectionKey || c.pathKeyChain?.includes(activeCollectionKey))
-      )
-      : library.items
-  }, [activeCollectionKey, library.items])
-
-  const filterYearOptions = useMemo(() => {
-    const years = new Set<number>()
-    for (const it of collectionItems) {
-      const raw = String((it as unknown as Record<string, unknown>).year ?? '')
-      const y = Number.parseInt(raw.replace(/[^\d]/g, ''), 10)
-      if (Number.isFinite(y) && y > 0) years.add(y)
-    }
-    return Array.from(years)
-      .sort((a, b) => b - a)
-      .map((y) => ({ value: String(y), label: String(y) }))
-  }, [collectionItems])
-
-  const filterTypeOptions = useMemo(() => {
-    const types = new Set<string>()
-    for (const it of collectionItems) {
-      const raw = String(((it as unknown as Record<string, unknown>).type ?? it.bib_type ?? '') as unknown)
-        .trim()
-        .replace(/\s+/g, ' ')
-      if (raw) types.add(raw)
-    }
-    return Array.from(types)
-      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
-      .map((t) => ({ value: t, label: t }))
-  }, [collectionItems])
-
-  /**
-   * 核心计算：文献列表筛选
-   * 综合应用以下过滤条件：
-   * 1. 当前选中的集合（activeCollectionKey）
-   * 2. 处理状态（statusMode：未处理/已处理/全部）
-   * 3. 搜索关键词（searchQuery：模糊匹配标题/作者）
-   * 4. 字段高级筛选（年份、类型、出版物）
-   */
-  // 根据集合与状态筛选条目：
-  // - 集合命中规则：集合 key 命中或 pathKeyChain 包含（选中父集合会包含其子集合条目）
-  const filteredItems = useMemo(() => {
-    const byStatus =
-      filterMode === 'all'
-        ? collectionItems
-        : filterMode === 'unprocessed'
-          ? collectionItems.filter((it) => it.processed_status !== 'done' && it.processed_status !== 'reanalyzing')
-          : collectionItems.filter((it) => it.processed_status === 'done' || it.processed_status === 'reanalyzing')
-
-    const q = normalizedSearchQuery
-    const normalizeText = (v: unknown) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
-
-    const byFieldFilter = (() => {
-      const predicates: Array<(it: LiteratureItem) => boolean> = []
-
-      const yearRaw = fieldFilter.year.trim()
-      if (yearRaw) {
-        const targetYear = Number.parseInt(yearRaw, 10)
-        if (Number.isFinite(targetYear)) {
-          predicates.push((it) => {
-            const raw = String((it as unknown as Record<string, unknown>).year ?? '')
-            const y = Number.parseInt(raw.replace(/[^\d]/g, ''), 10)
-            if (!Number.isFinite(y)) return false
-            if (fieldFilter.yearOp === 'gt') return y > targetYear
-            if (fieldFilter.yearOp === 'lt') return y < targetYear
-            return y === targetYear
-          })
-        }
-      }
-
-      const typeRaw = fieldFilter.type.trim()
-      if (typeRaw) {
-        const target = normalizeText(typeRaw)
-        predicates.push((it) => {
-          const v = ((it as unknown as Record<string, unknown>).type ?? it.bib_type ?? '') as unknown
-          return normalizeText(v) === target
-        })
-      }
-
-      const pubRaw = fieldFilter.publications.trim()
-      if (pubRaw) {
-        const target = normalizeText(pubRaw)
-        predicates.push((it) => {
-          const v = ((it as unknown as Record<string, unknown>).publications ?? '') as unknown
-          return normalizeText(v).includes(target)
-        })
-      }
-
-      if (predicates.length === 0) return byStatus
-      const matchAll = fieldFilter.match === 'all'
-      return byStatus.filter((it) => (matchAll ? predicates.every((p) => p(it)) : predicates.some((p) => p(it))))
-    })()
-
-    if (!q) return byFieldFilter
-
-    return byFieldFilter.filter((it) => {
-      const title = normalizeText(it.title)
-      const author = normalizeText(it.author)
-      return title.includes(q) || author.includes(q)
-    })
-  }, [
-    activeView,
-    collectionItems,
-    fieldFilter,
-    filterMode,
-    normalizedSearchQuery,
-  ])
-
-  const activeItem = useMemo(
-    () => (activeItemKey ? library.items.find((it) => it.item_key === activeItemKey) ?? null : null),
-    [activeItemKey, library.items]
-  )
-
-  const activeItemIndex = useMemo(() => {
-    if (!activeItemKey) return -1
-    return filteredItems.findIndex((it) => it.item_key === activeItemKey)
-  }, [activeItemKey, filteredItems])
-
-  const canPrevDetail = activeItemIndex > 0
-  const canNextDetail = activeItemIndex >= 0 && activeItemIndex < filteredItems.length - 1
-
-  const goPrevDetail = useCallback(() => {
-    if (!canPrevDetail) return
-    const prevKey = filteredItems[activeItemIndex - 1]?.item_key
-    if (prevKey) setActiveItemKey(prevKey)
-  }, [activeItemIndex, canPrevDetail, filteredItems])
-
-  const goNextDetail = useCallback(() => {
-    if (!canNextDetail) return
-    const nextKey = filteredItems[activeItemIndex + 1]?.item_key
-    if (nextKey) setActiveItemKey(nextKey)
-  }, [activeItemIndex, canNextDetail, filteredItems])
-
+  // 6. 详情页引用自动生成
+  // 当打开详情页时，自动检查并生成该条目的引用信息
   useEffect(() => {
     if (!activeItemKey) {
       setDetailCitationState({ loading: false, error: null })
@@ -1015,6 +425,8 @@ export default function App() {
     }
   }, [activeItemKey, citationsTick, ensureCitations, library.items])
 
+  // 7. 列表中引用自动生成
+  // 当引用列可见时，批量生成当前页所有条目的引用
   useEffect(() => {
     if (!citationColumnVisible) return
     const keys = currentPageRows.map((it) => it.item_key).filter(Boolean)
@@ -1022,350 +434,10 @@ export default function App() {
     void ensureCitations(keys)
   }, [citationColumnVisible, currentPageRows, ensureCitations])
 
-  /**
-   * 核心操作：启动分析
-   * 1. 将选中的文献标记为 processing/reanalyzing 状态
-   * 2. 调用后端 RPC startAnalysis
-   * 3. 监听后端通过 Channel 返回的 AnalysisEvent 事件流，实时更新 UI 状态
-   */
-  const startAnalysis = async (customKeys?: string[]) => {
-    const keys = customKeys ?? (selectedRowKeys as string[])
-    if (keys.length === 0) return
-
-    const msgKey = 'analysis'
-
-    setAnalysisInProgress(true)
-    analysisInProgressRef.current = true
-    setLibrary((prev) => ({
-      ...prev,
-      items: prev.items.map((it) => {
-        if (!keys.includes(it.item_key)) return it
-        // 根据条目当前状态判断：已完成的条目是"重新分析"，否则是"新分析"
-        const isReanalyze = it.processed_status === 'done'
-        return { ...it, processed_status: isReanalyze ? 'reanalyzing' : 'processing', processed_error: undefined }
-      }),
-    }))
-    message.loading({ content: '正在分析…', key: msgKey, duration: 0 })
-
-    // 通过事件流驱动 UI 状态
-    const onEvent = (evt: AnalysisEvent) => {
-      if (evt.event === 'Started') {
-        const k = evt.data.item_key
-        // Started 时保持当前状态（processing 或 reanalyzing），不覆盖
-      }
-      if (evt.event === 'Finished') {
-        const k = evt.data.item_key
-        setLibrary((prev) => ({
-          ...prev,
-          items: prev.items.map((it) => (it.item_key === k ? { ...it, processed_status: 'done', sync_status: 'unsynced' } : it))
-        }))
-      }
-      if (evt.event === 'Failed') {
-        const k = evt.data.item_key
-        const isCancelled = evt.data.error === 'CANCELLED'
-        setLibrary((prev) => ({
-          ...prev,
-          items: prev.items.map((it) => {
-            if (it.item_key !== k) return it
-            if (isCancelled) {
-              // 重新分析被取消：恢复为 done（保留在矩阵视图）
-              // 新分析被取消：恢复为 unprocessed
-              const restoreStatus = it.processed_status === 'reanalyzing' ? 'done' : 'unprocessed'
-              return { ...it, processed_status: restoreStatus, processed_error: undefined }
-            }
-            return { ...it, processed_status: 'failed', processed_error: evt.data.error }
-          })
-        }))
-        if (!isCancelled) {
-          message.error(`分析失败(${k}): ${evt.data.error}`)
-        }
-      }
-      if (evt.event === 'AllDone') {
-        setAnalysisInProgress(false)
-        analysisInProgressRef.current = false
-        refreshLibrary('auto')
-        message.success({ content: '分析完成', key: msgKey })
-      }
-    }
-
-    try {
-      await startAnalysisRpc(keys, onEvent)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : '启动分析失败'
-      setAnalysisInProgress(false)
-      analysisInProgressRef.current = false
-      setLibrary((prev) => ({
-        ...prev,
-        items: prev.items.map((it) =>
-          keys.includes(it.item_key) ? { ...it, processed_status: 'failed', processed_error: msg } : it
-        ),
-      }))
-      message.error({ content: msg, key: msgKey })
-    }
-  }
-
-  /**
-   * UI 交互：请求分析
-   * 如果选中的条目包含混合状态（已完成+未完成），提示策略选择；
-   * 如果全是已完成，提示重新分析；
-   * 否则直接启动。
-   */
-  const handleAnalysisRequest = () => {
-    if (selectedRowKeys.length === 0) return
-    const items = library.items.filter((it) => selectedRowKeys.includes(it.item_key))
-    const total = items.length
-    const doneCount = items.filter((it) => it.processed_status === 'done').length
-
-    if (doneCount > 0 && doneCount < total) {
-      setConfirmModal({ open: true, type: 'mixed_analyze' })
-      return
-    }
-
-    if (doneCount > 0) {
-      setConfirmModal({ open: true, type: 'analyze' })
-    } else {
-      void startAnalysis()
-    }
-  }
-
-  /**
-   * UI 交互：请求终止分析
-   */
-  const handleStopAnalysisRequest = () => {
-    setConfirmModal({ open: true, type: 'stop' })
-  }
-
-  /**
-   * 确认终止分析
-   * 调用后端终止接口，前端主动更新状态（因为 taskkill 终止后事件流会中断）
-   */
-  const handleConfirmStopAnalysis = async () => {
-    setStoppingAnalysis(true)
-    try {
-      const res = await stopAnalysisRpc()
-      if (res.stopped) {
-        // 前端主动更新状态，因为 taskkill 强制终止后后端事件流会中断
-        // processing 恢复为 unprocessed，reanalyzing 恢复为 done
-        setLibrary((prev) => ({
-          ...prev,
-          items: prev.items.map((it) => {
-            if (it.processed_status === 'processing') {
-              return { ...it, processed_status: 'unprocessed', processed_error: undefined }
-            }
-            if (it.processed_status === 'reanalyzing') {
-              return { ...it, processed_status: 'done', processed_error: undefined }
-            }
-            return it
-          })
-        }))
-        setAnalysisInProgress(false)
-        analysisInProgressRef.current = false
-        message.info(`已终止分析，取消了 ${res.cancelled_count} 个待分析任务`)
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : '终止分析失败'
-      message.error(msg)
-    } finally {
-      setStoppingAnalysis(false)
-      setConfirmModal((prev) => ({ ...prev, open: false }))
-    }
-  }
-
-  const handleConfirmAnalysis = () => {
-    void startAnalysis()
-    setConfirmModal((prev) => ({ ...prev, open: false }))
-  }
-
-  /**
-   * 核心操作：删除已提取数据 - 触发确认弹窗
-   */
-  const handleDeleteRequest = () => {
-    const keys = selectedRowKeys as string[]
-    if (keys.length === 0 || deletingExtracted) return
-    setConfirmModal({ open: true, type: 'delete' })
-  }
-
-  /**
-   * 核心操作：确认删除已提取数据（乐观更新）
-   * 1. 立即更新前端状态
-   * 2. 立即清空选中项并关闭弹窗
-   * 3. 异步调用后端删除，完成后刷新同步真实状态
-   */
-  const handleConfirmDelete = async () => {
-    const keys = selectedRowKeys as string[]
-    if (keys.length === 0) {
-      setConfirmModal((prev) => ({ ...prev, open: false }))
-      return
-    }
-
-    // 1. 立即更新前端状态：将选中条目的状态设为 unprocessed
-    setLibrary((prev) => ({
-      ...prev,
-      items: prev.items.map((it) =>
-        keys.includes(it.item_key)
-          ? { ...it, processed_status: 'unprocessed', sync_status: 'unsynced' }
-          : it
-      ),
-    }))
-
-    // 2. 立即清空选中项并关闭弹窗
-    setSelectedRowKeys([])
-    setConfirmModal((prev) => ({ ...prev, open: false }))
-
-    // 3. 异步执行后端删除操作
-    setDeletingExtracted(true)
-    try {
-      const res = (await deleteExtractedDataRpc(keys)) as {
-        cleared?: number
-        missing?: number
-        analysis_fields?: number
-        feishu?: { deleted?: number; skipped?: number; failed?: number }
-      }
-      const cleared = Number(res?.cleared ?? 0)
-      const missing = Number(res?.missing ?? 0)
-      const feishuDeleted = Number(res?.feishu?.deleted ?? 0)
-      const feishuFailed = Number(res?.feishu?.failed ?? 0)
-
-      // 刷新同步真实状态
-      await handleRefresh()
-
-      if (feishuFailed > 0) {
-        message.warning(`已清除 ${cleared} 条（缺失 ${missing} 条），飞书删除成功 ${feishuDeleted} 条，失败 ${feishuFailed} 条`)
-      } else {
-        message.success(`已清除 ${cleared} 条（缺失 ${missing} 条），飞书删除 ${feishuDeleted} 条`)
-      }
-    } finally {
-      setDeletingExtracted(false)
-    }
-  }
-
-
-
   const segmentedOptions: { label: string; value: string }[] = [
     { label: 'Zotero库', value: 'zotero' },
     { label: '文献矩阵', value: 'matrix' },
   ]
-
-  const buildNextConfig = useCallback((nextPartial: Record<string, unknown>) => {
-    const prev = rawConfig
-    const prevZotero = (prev.zotero as Record<string, unknown>) ?? {}
-    const prevLlm = (prev.llm as Record<string, unknown>) ?? {}
-    const prevFeishu = (prev.feishu as Record<string, unknown>) ?? {}
-    const prevFields = (prev.fields as Record<string, unknown>) ?? {}
-    const prevUi = (prev.ui as Record<string, unknown>) ?? {}
-    const nextZotero = (nextPartial.zotero as Record<string, unknown>) ?? {}
-    const nextLlm = (nextPartial.llm as Record<string, unknown>) ?? {}
-    const nextFeishu = (nextPartial.feishu as Record<string, unknown>) ?? {}
-    const nextFields = (nextPartial.fields as Record<string, unknown>) ?? {}
-    const nextUi = (nextPartial.ui as Record<string, unknown>) ?? {}
-    return {
-      ...prev,
-      ...nextPartial,
-      zotero: { ...prevZotero, ...nextZotero },
-      llm: { ...prevLlm, ...nextLlm },
-      feishu: { ...prevFeishu, ...nextFeishu },
-      fields: { ...prevFields, ...nextFields },
-      ui: { ...prevUi, ...nextUi },
-    }
-  }, [rawConfig])
-
-  const buildNextFields = useCallback((rows: AnalysisFieldRow[]) => {
-    const deduped = rows
-      .map((r) => ({
-        key: String(r.key ?? '').trim(),
-        description: String(r.description ?? '').trim(),
-        type: String(r.type ?? 'string').trim(),
-        rule: String(r.rule ?? '').trim(),
-        name: String(r.name ?? '').trim(),
-      }))
-      .filter((r) => r.key.length > 0)
-
-    const seen = new Set<string>()
-    for (const r of deduped) {
-      if (seen.has(r.key)) {
-        throw new Error(`重复字段 key：${r.key}`)
-      }
-      seen.add(r.key)
-    }
-
-    const nextAnalysis: Record<string, unknown> = {}
-    for (const r of deduped) {
-      nextAnalysis[r.key] = {
-        description: r.description,
-        type: r.type || 'string',
-        rule: r.rule || undefined,
-        name: r.name || undefined,
-      }
-    }
-
-    return {
-      ...rawFields,
-      analysis_fields: nextAnalysis,
-    }
-  }, [rawFields])
-
-  const buildNextAnalysisOrder = useCallback((rows: AnalysisFieldRow[]) => {
-    return rows
-      .map((r) => String(r.key ?? '').trim())
-      .filter((k) => k.length > 0)
-  }, [])
-
-  /**
-   * 设置页操作：保存设置
-   * 收集所有 Form 表单的数据，构造完整的 Config 对象并发送给后端保存。
-   */
-  const saveSettingsNow = useCallback(async () => {
-    if (settingsHydratingRef.current) return
-    setSettingsSaving(true)
-    try {
-      const partial = configForm.getFieldsValue(true) as Record<string, unknown>
-      const fieldsValue = fieldsForm.getFieldsValue(true) as { analysis_fields?: AnalysisFieldRow[] }
-      const rows = Array.isArray(fieldsValue.analysis_fields) ? fieldsValue.analysis_fields : []
-      const nextConfig = buildNextConfig(partial)
-      const nextFields = buildNextFields(rows)
-      nextConfig.fields = nextFields
-      const nextOrder = buildNextAnalysisOrder(rows)
-      const ui = (nextConfig.ui as Record<string, unknown>) ?? {}
-      const tableColumns = (ui.table_columns as Record<string, unknown>) ?? {}
-      const matrix = (tableColumns.matrix as Record<string, unknown>) ?? {}
-      const analysis = (matrix.analysis as Record<string, unknown>) ?? {}
-      const nextAnalysis = { ...analysis, order: nextOrder }
-      nextConfig.ui = {
-        ...ui,
-        table_columns: {
-          ...tableColumns,
-          matrix: { ...matrix, analysis: nextAnalysis },
-        },
-      }
-
-      const cfgRes = await saveConfig(nextConfig)
-      if (!cfgRes.saved) {
-        message.error('保存失败：请检查运行环境与文件权限')
-        return
-      }
-
-      setRawConfig(nextConfig)
-      setRawFields(nextFields)
-
-      const zoteroCfg = (nextConfig.zotero as Record<string, unknown>) ?? {}
-      const zoteroDataDir = typeof zoteroCfg.data_dir === 'string' ? zoteroCfg.data_dir : ''
-      setZoteroStatus({ path: zoteroDataDir || '未配置', connected: !!zoteroDataDir })
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : '未知错误'
-      message.error(msg)
-    } finally {
-      setSettingsSaving(false)
-    }
-  }, [buildNextAnalysisOrder, buildNextConfig, buildNextFields, configForm, fieldsForm])
-
-  const scheduleAutoSaveSettings = useCallback(() => {
-    if (settingsHydratingRef.current) return
-    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current)
-    autoSaveTimerRef.current = window.setTimeout(() => {
-      autoSaveTimerRef.current = null
-      void saveSettingsNow()
-    }, 500)
-  }, [saveSettingsNow])
 
   return (
     <ConfigProvider
@@ -1394,8 +466,10 @@ export default function App() {
     >
       <AntApp>
         <div className="flex h-screen w-screen overflow-hidden bg-[var(--app-bg)]">
+          {/* 自定义标题栏 */}
           <TitleBar />
           <Layout className="w-full h-full bg-transparent">
+            {/* 左侧侧边栏：根据模式显示 文献库目录 或 设置菜单 */}
             <Sider width={280} theme="light" className="border-r border-slate-200 !bg-[var(--app-bg)]">
               {mode === 'workbench' ? (
                 <AppSidebar
@@ -1426,6 +500,7 @@ export default function App() {
                 />
               )}
             </Sider>
+            {/* 主要内容区域 */}
             <Content className="flex flex-col overflow-hidden min-h-0 relative p-4 pt-10 gap-4">
               {/* 顶部拖拽区域：避开右上角窗口控制按钮 (约140px宽)，防止点击穿透 */}
               <div data-tauri-drag-region className="absolute top-0 left-0 right-36 h-10" />
@@ -1512,9 +587,12 @@ export default function App() {
                             year: fieldFilter.year,
                             type: fieldFilter.type,
                             publications: fieldFilter.publications,
+                            tags: fieldFilter.tags,
+                            keywords: fieldFilter.keywords,
+                            bibType: fieldFilter.bibType,
                           }}
                           onChange={(next) => {
-                            // 使用单次状态更新减少重渲染（之前是6次独立的setState）
+                            // 使用单次状态更新减少重渲染
                             setFilterMode(next.statusMode)
                             setFieldFilter({
                               match: next.match,
@@ -1522,10 +600,16 @@ export default function App() {
                               year: next.year,
                               type: next.type,
                               publications: next.publications,
+                              tags: next.tags || [],
+                              keywords: next.keywords || [],
+                              bibType: next.bibType || '',
                             })
                           }}
                           yearOptions={filterYearOptions}
                           typeOptions={filterTypeOptions}
+                          tagOptions={filterTagOptions}
+                          keywordOptions={filterKeywordOptions}
+                          bibTypeOptions={filterBibTypeOptions}
                         />
                         <ColumnSettingsPopover
                           open={columnsPopoverOpen}
@@ -1596,6 +680,8 @@ export default function App() {
                       onOpenDetail={(key) => setActiveItemKey(key)}
                       onRefresh={handleRefresh}
                       onPageRowsChange={setCurrentPageRows}
+                      activeItemKey={activeItemKey}
+                      onSortedDataChange={setSortedItems}
                     />
                   </div>
                 </div>
@@ -1616,6 +702,7 @@ export default function App() {
             </Content>
           </Layout>
 
+          {/* 详情页抽屉：显示文献详情、编辑分析结果 */}
           {mode === 'workbench' ? (
             <LiteratureDetailDrawer
               item={activeItem}
@@ -1648,6 +735,8 @@ export default function App() {
               }
             />
           ) : null}
+
+          {/* 确认模态框：处理高风险操作的二次确认 */}
           <ConfirmModal
             open={confirmModal.open}
             onCancel={() => setConfirmModal((prev) => ({ ...prev, open: false }))}
@@ -1756,6 +845,10 @@ export default function App() {
   )
 }
 
+/**
+ * 子模块: 设置侧边栏
+ * 功能: 在设置模式下显示的侧边栏，提供不同设置项的导航菜单。
+ */
 function SettingsSidebar({
   activeKey,
   onSelect,

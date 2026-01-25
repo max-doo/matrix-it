@@ -206,7 +206,7 @@ export function ColumnSettingsPopover({
       {activeView === 'matrix' ? (
         <>
           <div className="h-px bg-slate-100 my-3" />
-          <div className="text-xs secondary-color mb-2 px-1">解析字段</div>
+          <div className="text-xs secondary-color mb-2 px-1">分析字段</div>
           <div className="flex flex-col gap-1">
             {currentAnalysisKeys.map((k) => {
               const hidden = analysisPanel.hidden.has(k)

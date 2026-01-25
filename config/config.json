@@ -105,6 +105,10 @@
         "name": "出版物",
         "type": "string"
       },
+      "tags": {
+        "name": "标签",
+        "type": "multi_select"
+      },
       "title": {
         "name": "标题",
         "type": "string"
@@ -137,9 +141,22 @@
     "table_columns": {
       "matrix": {
         "analysis": {
-          "visible": [
-            "tldr",
+          "order": [
+            "bib_type",
+            "contribution",
+            "highlights",
+            "inspiration",
+            "key_findings",
             "key_word",
+            "limitations",
+            "logic",
+            "methods",
+            "research_question",
+            "tldr"
+          ],
+          "visible": [
+            "key_word",
+            "tldr",
             "bib_type",
             "research_question",
             "methods",
@@ -155,9 +172,9 @@
           "visible": [
             "title",
             "author",
-            "year",
             "type",
-            "publications"
+            "publications",
+            "year"
           ]
         }
       },
@@ -165,8 +182,9 @@
         "meta": {
           "visible": [
             "title",
-            "author",
             "year",
+            "tags",
+            "author",
             "type",
             "publications"
           ]

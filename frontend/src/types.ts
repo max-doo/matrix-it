@@ -12,6 +12,7 @@
  * 文献处理状态：
  * - unprocessed: 未处理
  * - processing: 正在分析中
+ * - reanalyzing: 重新分析中
  * - done: 分析完成
  * - failed: 分析失败
  */
@@ -80,3 +81,15 @@ export type AnalysisEvent =
   | { event: 'Finished'; data: { item_key: string } }
   | { event: 'Failed'; data: { item_key: string; error: string } }
   | { event: 'AllDone'; data: null }
+
+/**
+ * 分析字段配置行：
+ * 用于设置页面定义自定义分析字段
+ */
+export type AnalysisFieldRow = {
+  key: string
+  description?: string
+  type?: string
+  rule?: string
+  name?: string
+}

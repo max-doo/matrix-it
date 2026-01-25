@@ -5,11 +5,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react'
 import type { BadgeProps } from 'antd'
-import { Badge } from 'antd'
+import { Badge, Tag } from 'antd'
 import type { ProColumns } from '@ant-design/pro-components'
 import { ProTable } from '@ant-design/pro-components'
 
 import type { LiteratureItem, ProcessingStatus } from '../../types'
+import { formatAuthor, getLiteratureTypeMeta } from '../utils/ui-formatters'
 
 export type LiteratureTableView = 'zotero' | 'matrix'
 
@@ -25,6 +26,10 @@ export type LiteratureTableProps = {
   onOpenDetail: (itemKey: string) => void
   onRefresh: () => void
   onPageRowsChange?: (rows: LiteratureItem[]) => void
+  /** 排序后的完整数据，用于抽屉切换条目时按视图顺序导航 */
+  onSortedDataChange?: (rows: LiteratureItem[]) => void
+  /** 当前激活的条目 key，用于高亮显示和自动滚动 */
+  activeItemKey?: string | null
 }
 
 const TITLE_KEY = 'title'
@@ -37,18 +42,23 @@ const STATUS_KEY = 'status'
 const COLUMN_MIN_WIDTHS: Record<string, number> = {
   [TITLE_KEY]: 180,
   author: 160,
-  year: 110,
-  type: 140,
+  year: 80,
+  type: 90,
+  bib_type: 90,
+  tags: 200,
+  key_word: 200,
   publications: 220,
-  citation: 220,
-  abstract: 260,
-  doi: 160,
-  url: 240,
-  collections: 220,
-  [STATUS_KEY]: 160,
+  [STATUS_KEY]: 120,
 }
 
-const DEFAULT_MIN_WIDTH = 260
+const COLUMN_MAX_WIDTHS: Record<string, number> = {
+  [TITLE_KEY]: 600,
+  publications: 300,
+  tags: 500,
+  key_word: 500,
+}
+
+const DEFAULT_MIN_WIDTH = 360
 
 const getMinWidth = (key: string) => COLUMN_MIN_WIDTHS[key] ?? DEFAULT_MIN_WIDTH
 
@@ -75,9 +85,9 @@ const getStatusBadge = (
   }
   if (processed === 'done')
     return sync === 'synced'
-      ? { status: 'success', text: '已完成 · 已同步', color: 'green' }
-      : { status: 'success', text: '已完成', color: 'cyan' }
-  return { status: 'default', text: '未处理', color: 'default' }
+      ? { status: 'success', text: '已分析 · 已同步', color: 'green' }
+      : { status: 'success', text: '已分析', color: 'cyan' }
+  return { status: 'default', text: '未分析', color: 'default' }
 }
 
 /**
@@ -166,9 +176,11 @@ export function LiteratureTable({
   onOpenDetail,
   onRefresh,
   onPageRowsChange,
+  onSortedDataChange,
+  activeItemKey,
 }: LiteratureTableProps) {
   const showStatus = view === 'zotero'
-  const fixedWidthCols = useMemo(() => (view === 'zotero' ? new Set(['author', 'year', 'type']) : new Set<string>()), [view])
+  const fixedWidthCols = useMemo(() => new Set(['author', 'year', 'type', 'bib_type']), [])
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
 
@@ -225,6 +237,33 @@ export function LiteratureTable({
     return order === 'descend' ? sorted.reverse() : sorted
   }, [data, sortState])
 
+  // 当排序后的数据变化时，通知父组件
+  useEffect(() => {
+    if (onSortedDataChange) onSortedDataChange(sortedData)
+  }, [onSortedDataChange, sortedData])
+
+  // 当激活条目变化时，自动切换到对应页并滚动到该行
+  useEffect(() => {
+    if (!activeItemKey) return
+    const index = sortedData.findIndex((it) => it.item_key === activeItemKey)
+    if (index < 0) return
+    // 计算该条目所在的页码
+    const targetPage = Math.floor(index / pageSize) + 1
+    if (targetPage !== currentPage) {
+      setCurrentPage(targetPage)
+    }
+    // 延迟滚动，确保翻页后 DOM 已更新
+    const rafId = window.requestAnimationFrame(() => {
+      const el = containerRef.current
+      if (!el) return
+      const row = el.querySelector(`tr[data-row-key="${activeItemKey}"]`) as HTMLElement | null
+      if (row) {
+        row.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      }
+    })
+    return () => window.cancelAnimationFrame(rafId)
+  }, [activeItemKey, sortedData, pageSize, currentPage])
+
   useEffect(() => {
     if (!onPageRowsChange) return
     const start = Math.max(0, (currentPage - 1) * pageSize)
@@ -233,7 +272,7 @@ export function LiteratureTable({
   }, [currentPage, sortedData, onPageRowsChange, pageSize])
 
   const titleOption = useMemo(() => metaColumns.find((c) => c.key === TITLE_KEY) ?? null, [metaColumns])
-  const visibleMeta = useMemo(() => metaColumns.filter((c) => c.key !== TITLE_KEY), [metaColumns])
+  const visibleMeta = useMemo(() => metaColumns.filter((c) => c.key !== TITLE_KEY && (view === 'zotero' || c.key !== 'tags')), [metaColumns, view])
   const visibleAnalysis = useMemo(
     () => (view === 'matrix' ? (analysisColumns ?? []) : []),
     [analysisColumns, view]
@@ -313,17 +352,14 @@ export function LiteratureTable({
   }, [visibleKeys, widthsStorageKey])
 
   const computeWeights = useCallback((key: string) => {
-    if (key === TITLE_KEY) return 3.2
-    if (key === STATUS_KEY) return 2.0
-    if (key === 'year') return 1.2
-    if (key === 'type') return 1.4
+    if (key === TITLE_KEY) return 8.0
+    if (key === STATUS_KEY) return 1.3
+    if (key === 'year') return 0.8
+    if (key === 'type') return 1.0
     if (key === 'author') return 1.8
-    if (key === 'publications') return 2.2
-    if (key === 'citation') return 2.2
-    if (key === 'abstract') return 3.2
-    if (key === 'doi') return 1.6
-    if (key === 'url') return 2.4
-    if (key === 'collections') return 2.0
+    if (key === 'tags') return 2.0
+    if (key === 'key_word') return 2.0
+    if (key === 'publications') return 1.6
     return 2.8
   }, [])
 
@@ -339,7 +375,12 @@ export function LiteratureTable({
       const weights = visibleKeys.map((k) => ({ key: k, weight: computeWeights(k), min: getMinWidth(k) }))
       const totalWeight = weights.reduce((acc, x) => acc + x.weight, 0) || 1
       const out: Record<string, number> = {}
-      for (const x of weights) out[x.key] = x.min + (extra * x.weight) / totalWeight
+      for (const x of weights) {
+        let w = x.min + (extra * x.weight) / totalWeight
+        const max = COLUMN_MAX_WIDTHS[x.key]
+        if (max !== undefined && w > max) w = max
+        out[x.key] = w
+      }
       return out
     },
     [computeWeights, visibleKeys]
@@ -420,11 +461,9 @@ export function LiteratureTable({
       const v = typeof stored[k] === 'number' ? stored[k] : computed[k]
       merged[k] = Math.max(getMinWidth(k), Number.isFinite(v) ? v : getMinWidth(k))
     }
-    if (view === 'zotero') {
-      for (const k of fixedWidthCols) {
-        if (!visibleKeys.includes(k)) continue
-        merged[k] = getMinWidth(k)
-      }
+    for (const k of fixedWidthCols) {
+      if (!visibleKeys.includes(k)) continue
+      merged[k] = getMinWidth(k)
     }
     columnWidthsPxRef.current = merged
     applyColumnWidthsToCssVars(merged)
@@ -601,9 +640,20 @@ export function LiteratureTable({
           key: colKey,
           title: c.label,
           dataIndex: colKey,
-          ellipsis: view !== 'matrix',
+          ellipsis: (colKey === 'author' || colKey === 'tags') ? false : view !== 'matrix',
           width: getColCssVar(colKey),
-          onCell: () => ({ style: { minWidth: getMinWidth(colKey), ...(wrapCellStyle ?? {}) } }),
+          onCell: () => ({
+            style: {
+              minWidth: getMinWidth(colKey),
+              ...(colKey === 'author'
+                ? { whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere' }
+                : {}),
+              ...(colKey === 'tags'
+                ? { whiteSpace: 'normal' }
+                : {}),
+              ...(wrapCellStyle ?? {})
+            }
+          }),
           onHeaderCell: () =>
           ({
             width: getColCssVar(colKey),
@@ -620,15 +670,60 @@ export function LiteratureTable({
           sortDirections: ['ascend', 'descend', 'ascend'],
           render: (_, record) => {
             const v = (record as Record<string, unknown>)[colKey]
-            if (v === null || v === undefined || v === '') {
-              if (colKey === 'key_word') {
-                const metaExtra = (record as Record<string, unknown>).meta_extra
-                const tags = metaExtra && typeof metaExtra === 'object' ? (metaExtra as Record<string, unknown>).tags : null
-                if (Array.isArray(tags)) {
-                  const s = tags.map((x) => String(x || '').trim()).filter(Boolean).join(', ')
-                  if (s) return <span className="secondary-color">{s}</span>
-                }
+
+            // 特殊处理：作者（格式化 + 截断）
+            if (colKey === 'author') {
+              return <span className="secondary-color">{formatAuthor(v, true)}</span>
+            }
+
+            // 特殊处理：文献类型（映射 + 配色标签）
+            if (colKey === 'type' || colKey === 'bib_type') {
+              const meta = getLiteratureTypeMeta(v)
+              return <Tag color={meta.color} bordered={false}>{meta.label}</Tag>
+            }
+
+            // 特殊处理：Zotero 标签
+            if (colKey === 'tags') {
+              const metaExtra = (record as Record<string, unknown>).meta_extra
+              const tags = metaExtra && typeof metaExtra === 'object' ? (metaExtra as Record<string, unknown>).tags : null
+              if (Array.isArray(tags) && tags.length > 0) {
+                return (
+                  <div className="flex flex-wrap gap-1">
+                    {tags.map((x) => String(x || '').trim()).filter(Boolean).map(t => (
+                      <Tag key={t} className="m-0 max-w-full !whitespace-normal break-words">{t}</Tag>
+                    ))}
+                  </div>
+                )
               }
+              return <span className="secondary-color">-</span>
+            }
+
+            // 特殊处理：分析关键词
+            if (colKey === 'key_word') {
+              const val = v
+              let keywords: string[] = []
+              if (Array.isArray(val)) {
+                keywords = val.map(x => String(x || '').trim()).filter(Boolean)
+              } else if (typeof val === 'string' && val.trim().length > 0) {
+                // 尝试解析可能的分隔符：中文逗号，英文逗号，分号，换行
+                keywords = val.split(/[,，;；\n]/).map(s => s.trim()).filter(Boolean)
+              }
+
+              if (keywords.length > 0) {
+                // 如果是 matrix 视图，且列宽足够，可以换行显示
+                // 这里复用 tags 的样式
+                return (
+                  <div className="flex flex-wrap gap-1">
+                    {keywords.map(k => (
+                      <Tag key={k} className="m-0 max-w-full !whitespace-normal break-words">{k}</Tag>
+                    ))}
+                  </div>
+                )
+              }
+              return <span className="secondary-color">-</span>
+            }
+
+            if (v === null || v === undefined || v === '') {
               return <span className="secondary-color">-</span>
             }
             if (Array.isArray(v)) return <span className="secondary-color">{v.filter(Boolean).join(', ') || '-'}</span>
@@ -665,7 +760,23 @@ export function LiteratureTable({
           } as unknown as ResizableHeaderCellProps),
           render: (_, record) => {
             const badge = getStatusBadge(record.processed_status, record.sync_status, record.processed_error)
-            return <Badge status={badge.status} text={badge.text} color={badge.color} />
+            // 状态文字着色：使用 AntD 预设颜色对应的 CSS 颜色，或者直接使用 style
+            const colorMap: Record<string, string> = {
+              blue: '#1677ff',
+              orange: '#fa8c16',
+              red: '#f5222d',
+              green: '#52c41a',
+              cyan: '#13c2c2',
+              default: 'rgba(0, 0, 0, 0.45)',
+            }
+            const textColor = badge.color && colorMap[badge.color] ? colorMap[badge.color] : undefined
+            return (
+              <Badge
+                status={badge.status}
+                color={badge.color}
+                text={<span style={{ color: textColor, fontWeight: 500 }}>{badge.text}</span>}
+              />
+            )
           },
         }
         : null
@@ -714,7 +825,8 @@ export function LiteratureTable({
         scroll={{ x: Math.max(containerWidth, tableMinWidth, currentTableWidth), y: tableScrollY }}
         components={{ header: { cell: ResizableHeaderCell } } as unknown as Record<string, unknown>}
         tableLayout="fixed"
-        className="matrixit-table h-full min-h-0 flex flex-col [&_.ant-pro-table-list-toolbar]:hidden [&_.ant-table-wrapper]:flex-1 [&_.ant-table-wrapper]:min-h-0 [&_.ant-table-wrapper]:flex [&_.ant-table-wrapper]:flex-col [&_.ant-spin-nested-loading]:flex-1 [&_.ant-spin-nested-loading]:min-h-0 [&_.ant-spin-nested-loading]:flex [&_.ant-spin-nested-loading]:flex-col [&_.ant-spin-container]:flex-1 [&_.ant-spin-container]:min-h-0 [&_.ant-spin-container]:flex [&_.ant-spin-container]:flex-col [&_.ant-table]:flex-1 [&_.ant-table]:min-h-0 [&_.ant-table]:flex [&_.ant-table]:flex-col [&_.ant-table-container]:flex-1 [&_.ant-table-container]:min-h-0 [&_.ant-table-container]:flex [&_.ant-table-container]:flex-col [&_.ant-table-body]:flex-1 [&_.ant-table-body]:min-h-0 [&_.ant-table-body]:overflow-auto [&_.ant-table-content]:overflow-auto [&_.ant-pagination]:mt-auto"
+        rowClassName={(record) => record.item_key === activeItemKey ? 'matrixit-row-active' : ''}
+        className="matrixit-table h-full min-h-0 flex flex-col [&_.ant-pro-table-list-toolbar]:hidden [&_.ant-table-wrapper]:flex-1 [&_.ant-table-wrapper]:min-h-0 [&_.ant-table-wrapper]:flex [&_.ant-table-wrapper]:flex-col [&_.ant-spin-nested-loading]:flex-1 [&_.ant-spin-nested-loading]:min-h-0 [&_.ant-spin-nested-loading]:flex [&_.ant-spin-nested-loading]:flex-col [&_.ant-spin-container]:flex-1 [&_.ant-spin-container]:min-h-0 [&_.ant-spin-container]:flex [&_.ant-spin-container]:flex-col [&_.ant-table]:flex-1 [&_.ant-table]:min-h-0 [&_.ant-table]:flex [&_.ant-table]:flex-col [&_.ant-table-container]:flex-1 [&_.ant-table-container]:min-h-0 [&_.ant-table-container]:flex [&_.ant-table-container]:flex-col [&_.ant-table-body]:flex-1 [&_.ant-table-body]:min-h-0 [&_.ant-table-body]:overflow-auto [&_.ant-table-content]:overflow-auto [&_.ant-pagination]:mt-auto [&_.matrixit-row-active>td]:!bg-[#e6f7f6] [&_.matrixit-row-active>td:first-child]:!shadow-[inset_3px_0_0_0_var(--primary-color)]"
         tableAlertRender={false}
         onChange={(p, f, s) => {
           const sorter = Array.isArray(s) ? s[0] : s

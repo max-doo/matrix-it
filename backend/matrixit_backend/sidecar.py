@@ -670,7 +670,8 @@ def update_item(literature_json: str, db_path: str, item_key: str, patch: dict) 
         it[k] = v
     try:
         storage.upsert_item(db_path, it)
-        storage.export_json(db_path, literature_json)
+        # 性能优化：移除 export_json 调用，SQLite 已是主数据源
+        # literature.json 将在 load_library 时统一导出
     except Exception:
         pass
     return {"updated": True}

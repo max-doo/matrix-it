@@ -324,15 +324,15 @@ export function SettingsPage({
                   字段设置
                 </Typography.Title>
                 <Typography.Paragraph type="secondary" className="!mt-0">
-                  Zotero 库仅展示元数据字段；文献矩阵展示元数据字段与解析字段。
+                  Zotero 库仅展示元数据字段；文献矩阵展示元数据字段与分析字段。
                 </Typography.Paragraph>
                 <Divider className="!my-3" />
 
                 <Typography.Title level={5} className="!mb-2">
-                  解析字段
+                  分析字段
                 </Typography.Title>
                 <Typography.Paragraph type="secondary" className="!mt-0">
-                  解析字段会影响 LLM 输出键集合与飞书字段映射；表格显示顺序与显隐请在主界面工具栏调整。
+                  分析字段会影响 LLM 输出键集合与飞书字段映射；表格显示顺序与显隐请在主界面工具栏调整。
                 </Typography.Paragraph>
                 <Divider className="!my-3" />
 

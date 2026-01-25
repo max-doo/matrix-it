@@ -523,32 +523,61 @@ async fn delete_extracted_data(app: tauri::AppHandle, item_keys: Vec<String>) ->
 
 #[tauri::command]
 async fn update_item(
-  app: tauri::AppHandle,
-  item_key: String,
-  patch: serde_json::Value,
+    item_key: String,
+    patch: serde_json::Value,
 ) -> Result<serde_json::Value, ApiError> {
-  ensure_sidecar_env();
-  let output = app
-    .shell()
-    .sidecar("matrixit-sidecar")
-    .map_err(|e| ApiError::new("SIDE_CAR_NOT_FOUND", e.to_string()))?
-    .arg("update_item")
-    .arg(item_key)
-    .arg(serde_json::to_string(&patch).map_err(|e| ApiError::new("JSON", e.to_string()))?)
-    .output()
-    .await
-    .map_err(|e| ApiError::new("SIDE_CAR_EXEC_FAILED", e.to_string()))?;
-
-  if !output.status.success() {
-    return Err(ApiError::new(
-      "SIDE_CAR_NON_ZERO",
-      String::from_utf8_lossy(&output.stderr).to_string(),
-    ));
-  }
-
-  let stdout = String::from_utf8(output.stdout).map_err(|e| ApiError::new("UTF8", e.to_string()))?;
-  let v: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| ApiError::new("JSON", e.to_string()))?;
-  Ok(v)
+    // 性能优化：直接在 Rust 中操作 SQLite，绕过 Python sidecar 进程启动开销
+    let root = find_project_root();
+    let db_path = root.join("data").join("matrixit.db");
+    
+    // 确保 data 目录存在
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| ApiError::new("DB_OPEN", e.to_string()))?;
+    
+    // 确保表存在
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS items (item_key TEXT PRIMARY KEY, json TEXT NOT NULL)",
+        [],
+    )
+    .map_err(|e| ApiError::new("DB_INIT", e.to_string()))?;
+    
+    // 1. 读取现有记录
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT json FROM items WHERE item_key = ?",
+            [&item_key],
+            |row| row.get(0),
+        )
+        .ok();
+    
+    let mut item: serde_json::Value = match existing {
+        Some(s) => serde_json::from_str(&s).unwrap_or(serde_json::json!({})),
+        None => return Ok(serde_json::json!({"updated": false})),
+    };
+    
+    // 2. 合并 patch（忽略关键字段）
+    let protected = ["item_key", "attachments", "collections", "date_modified", "item_type"];
+    if let Some(obj) = patch.as_object() {
+        for (k, v) in obj {
+            if protected.contains(&k.as_str()) { continue; }
+            item[k] = v.clone();
+        }
+    }
+    
+    // 3. 写回数据库
+    let json_str = serde_json::to_string(&item)
+        .map_err(|e| ApiError::new("JSON", e.to_string()))?;
+    conn.execute(
+        "INSERT INTO items(item_key, json) VALUES(?1, ?2) ON CONFLICT(item_key) DO UPDATE SET json = excluded.json",
+        rusqlite::params![&item_key, &json_str],
+    )
+    .map_err(|e| ApiError::new("DB_WRITE", e.to_string()))?;
+    
+    Ok(serde_json::json!({"updated": true}))
 }
 
 #[tauri::command]

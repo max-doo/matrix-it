@@ -3,7 +3,8 @@
  * 功能描述: 提供多维度的文献筛选功能，包括状态、年份、文献类型、出版物等条件的组合筛选。
  */
 import { useCallback, useMemo } from 'react'
-import { Button, Input, Popover, Select } from 'antd'
+import { Button, Input, Popover, Select, Tag } from 'antd'
+import { getLiteratureTypeMeta } from '../utils/ui-formatters'
 import { FilterOutlined } from '@ant-design/icons'
 import type { FilterMode } from '../../types'
 
@@ -18,6 +19,9 @@ export type LiteratureFilterPopoverValue = {
   year: string
   type: string
   publications: string
+  tags: string[]
+  keywords: string[]
+  bibType: string
 }
 
 export type LiteratureFilterPopoverProps = {
@@ -29,6 +33,9 @@ export type LiteratureFilterPopoverProps = {
   onChange: (next: LiteratureFilterPopoverValue) => void
   yearOptions: { value: string; label: string }[]
   typeOptions: { value: string; label: string }[]
+  tagOptions: { value: string; label: string }[]
+  keywordOptions: { value: string; label: string }[]
+  bibTypeOptions: { value: string; label: string }[]
   hideStatus?: boolean
 }
 
@@ -50,6 +57,9 @@ export function LiteratureFilterPopover({
   onChange,
   yearOptions,
   typeOptions,
+  tagOptions,
+  keywordOptions,
+  bibTypeOptions,
   hideStatus,
 }: LiteratureFilterPopoverProps) {
   const hasActiveFilters = useMemo(() => {
@@ -58,9 +68,12 @@ export function LiteratureFilterPopover({
       (value.statusMode !== 'all' && !hideStatus) ||
       value.year.trim().length > 0 ||
       value.type.trim().length > 0 ||
-      value.publications.trim().length > 0
+      value.publications.trim().length > 0 ||
+      value.tags.length > 0 ||
+      value.keywords.length > 0 ||
+      value.bibType.trim().length > 0
     )
-  }, [disabled, value.publications, value.statusMode, value.type, value.year, hideStatus])
+  }, [disabled, value.publications, value.statusMode, value.type, value.year, value.tags, value.keywords, value.bibType, hideStatus])
 
   const activeButtonStyle = useMemo(() => {
     if (!hasActiveFilters) return undefined
@@ -112,8 +125,8 @@ export function LiteratureFilterPopover({
                 className="w-full"
                 options={[
                   { value: 'all', label: '全部' },
-                  { value: 'unprocessed', label: '未处理' },
-                  { value: 'processed', label: '已处理' },
+                  { value: 'unprocessed', label: '未分析' },
+                  { value: 'processed', label: '已分析' },
                 ]}
               />
             </div>
@@ -150,7 +163,13 @@ export function LiteratureFilterPopover({
               onChange={(v) => update({ type: String(v ?? '') })}
               className="w-full"
               placeholder="请选择"
-              options={typeOptions}
+              options={typeOptions.map(opt => {
+                const meta = getLiteratureTypeMeta(opt.value)
+                return {
+                  value: opt.value,
+                  label: <Tag color={meta.color} bordered={false} className="m-0 !whitespace-normal">{meta.label}</Tag>
+                }
+              })}
             />
           </div>
 
@@ -164,6 +183,65 @@ export function LiteratureFilterPopover({
               onChange={(e) => update({ publications: e.target.value })}
             />
           </div>
+
+          {/* 标签筛选：仅在 Zotero 视图（hideStatus=false）显示 */}
+          {!hideStatus && (
+            <div className="grid grid-cols-[56px_54px_minmax(160px,1fr)] items-center gap-x-1 gap-y-1">
+              <div className="h-8 flex items-center justify-end pr-1 text-sm text-slate-700 select-none">标签</div>
+              <div className="h-8 flex items-center justify-center text-sm text-slate-700 select-none">∈</div>
+              <Select
+                mode="multiple"
+                allowClear
+                maxTagCount="responsive"
+                value={value.tags}
+                onChange={(v) => update({ tags: v })}
+                className="w-full"
+                placeholder="请选择"
+                options={tagOptions}
+              />
+            </div>
+          )}
+
+          {/* 关键词筛选：仅在 Matrix 视图（hideStatus=true）显示 */}
+          {hideStatus && (
+            <>
+              {/* 解析类型筛选 */}
+              <div className="grid grid-cols-[56px_54px_minmax(160px,1fr)] items-center gap-x-1 gap-y-1">
+                <div className="h-8 flex items-center justify-end pr-1 text-sm text-slate-700 select-none">类型2</div>
+                <div className="h-8 flex items-center justify-center text-sm text-slate-700 select-none">=</div>
+                <Select
+                  allowClear
+                  value={value.bibType || undefined}
+                  onChange={(v) => update({ bibType: String(v ?? '') })}
+                  className="w-full"
+                  placeholder="请选择"
+                  options={bibTypeOptions.map(opt => {
+                    const meta = getLiteratureTypeMeta(opt.value)
+                    return {
+                      value: opt.value,
+                      label: <Tag color={meta.color} bordered={false} className="m-0 !whitespace-normal">{meta.label}</Tag>
+                    }
+                  })}
+                />
+              </div>
+
+              {/* 关键词筛选 */}
+              <div className="grid grid-cols-[56px_54px_minmax(160px,1fr)] items-center gap-x-1 gap-y-1">
+                <div className="h-8 flex items-center justify-end pr-1 text-sm text-slate-700 select-none">关键词</div>
+                <div className="h-8 flex items-center justify-center text-sm text-slate-700 select-none">∈</div>
+                <Select
+                  mode="multiple"
+                  allowClear
+                  maxTagCount="responsive"
+                  value={value.keywords}
+                  onChange={(v) => update({ keywords: v })}
+                  className="w-full"
+                  placeholder="请选择"
+                  options={keywordOptions}
+                />
+              </div>
+            </>
+          )}
         </div>
 
         <div className="mt-2 flex items-center justify-end">
@@ -177,6 +255,9 @@ export function LiteratureFilterPopover({
                 year: '',
                 type: '',
                 publications: '',
+                tags: [],
+                keywords: [],
+                bibType: '',
               })
             }
           >

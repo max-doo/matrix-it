@@ -24,6 +24,10 @@ matrix-it/
 │  │  └─ ui/
 │  │     ├─ App.tsx               # 主界面：布局、批量操作、详情抽屉
 │  │     ├─ styles.css            # Tailwind 基础样式 + 少量全局样式
+│  │     ├─ defaults/
+│  │     │  └─ analysisFields.ts  # 默认解析字段定义
+│  │     ├─ utils/
+│  │     │  └─ ui-formatters.tsx  # UI 格式化工具（作者名处理、文献类型映射/着色）
 │  │     └─ components/
 │  │        ├─ AppSidebar.tsx      # 左侧集合树：搜索、展开/收起、选中态
 │  │        ├─ ColumnSettingsPopover.tsx # 字段设置弹层：列显隐/顺序，拖拽排序（带滚动/限高）
