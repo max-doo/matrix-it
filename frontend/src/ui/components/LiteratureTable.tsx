@@ -3,7 +3,7 @@
  * 功能描述: 高度定制的 ProTable 组件，用于展示通过 Zotero 或 Matrix 分析后的文献列表。
  *           支持列宽调整、排序、自定义渲染（徽标、标签等）以及视图切换（Zotero模式/Matrix模式）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react'
 import type { BadgeProps } from 'antd'
 import { Badge } from 'antd'
 import type { ProColumns } from '@ant-design/pro-components'
@@ -68,6 +68,7 @@ const getStatusBadge = (
   error?: string
 ): { status: BadgeProps['status']; text: string; color?: string } => {
   if (processed === 'processing') return { status: 'processing', text: '分析中', color: 'blue' }
+  if (processed === 'reanalyzing') return { status: 'processing', text: '重新分析中', color: 'orange' }
   if (processed === 'failed') {
     const reason = typeof error === 'string' && error.trim().length > 0 ? truncateText(error, 24) : ''
     return { status: 'error', text: reason ? `失败 · ${reason}` : '失败', color: 'red' }
@@ -77,6 +78,25 @@ const getStatusBadge = (
       ? { status: 'success', text: '已完成 · 已同步', color: 'green' }
       : { status: 'success', text: '已完成', color: 'cyan' }
   return { status: 'default', text: '未处理', color: 'default' }
+}
+
+/**
+ * 辅助函数：从 localStorage 读取排序状态
+ * 定义在组件外部，确保在首次渲染时可用。
+ */
+const readSortFromStorage = (storageKey: string): { key: string; order: 'ascend' | 'descend' } => {
+  try {
+    const raw = localStorage.getItem(storageKey)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed.key === 'string' && (parsed.order === 'ascend' || parsed.order === 'descend')) {
+        return parsed as { key: string; order: 'ascend' | 'descend' }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return { key: TITLE_KEY, order: 'ascend' }
 }
 
 type ResizableHeaderCellProps = React.ThHTMLAttributes<HTMLTableCellElement> & {
@@ -95,19 +115,22 @@ function ResizableHeaderCell(props: ResizableHeaderCellProps) {
   if (width !== undefined) mergedStyle.width = width
   if (minWidth !== undefined) mergedStyle.minWidth = minWidth
 
+  /**
+   * 表头点击处理：只拦截 resizer 区域的点击，其他区域正常传递给 antd 处理排序等交互
+   * 之前的逻辑会阻止所有非 sorter 区域的点击，可能导致某些交互失效
+   */
   const handleHeaderClick = useCallback(
     (e: React.MouseEvent<HTMLTableCellElement>) => {
       if (!onClick) return
       const target = e.target as HTMLElement | null
-      const inSorter =
-        !!target?.closest('.ant-table-column-sorters') ||
-        !!target?.closest('.ant-table-column-title') ||
-        !!target?.closest('.ant-table-column-sorter')
-      if (!inSorter) {
+      // 如果点击的是 resizer 区域，则不触发排序
+      const isResizer = !!target?.closest('.matrixit-col-resizer')
+      if (isResizer) {
         e.preventDefault()
         e.stopPropagation()
         return
       }
+      // 其他区域正常传递点击事件
       onClick(e)
     },
     [onClick]
@@ -149,18 +172,83 @@ export function LiteratureTable({
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
 
+  const sortStorageKey = `matrixit.ui.tableSort.${view}`
+
+  const [sortState, setSortState] = useState<{ key: string; order: 'ascend' | 'descend' }>(() => {
+    return readSortFromStorage(`matrixit.ui.tableSort.${view}`)
+  })
+
+  // 当 view 切换时，从对应的 localStorage 重新加载排序状态
+  const prevViewRef = useRef(view)
+  useEffect(() => {
+    if (prevViewRef.current !== view) {
+      prevViewRef.current = view
+      // 使用 startTransition 避免视图切换时的卡顿
+      startTransition(() => {
+        setSortState(readSortFromStorage(sortStorageKey))
+      })
+    }
+  }, [view, sortStorageKey])
+
+  // 监听 sortState 变化并持久化
+  useEffect(() => {
+    try {
+      localStorage.setItem(sortStorageKey, JSON.stringify(sortState))
+    } catch {
+      // ignore
+    }
+  }, [sortState, sortStorageKey])
+
+  /**
+   * 核心逻辑：在前端手动执行排序
+   * Ant Design Table 在首次挂载时，即使指定了 sortOrder，也不会自动触发 sorter 函数对 dataSource 进行排序。
+   * 因此我们需要在渲染前手动对数据进行一次排序，确保初始视图是有序的。
+   */
+  const sortedData = useMemo(() => {
+    if (!sortState.key) return data
+    const { key, order } = sortState
+    const sorted = [...data].sort((a, b) => {
+      // 特殊处理状态列
+      if (key === STATUS_KEY) {
+        const statusOrder: Record<ProcessingStatus, number> = { unprocessed: 0, processing: 1, reanalyzing: 1.5, done: 2, failed: 3 }
+        const av = statusOrder[a.processed_status] ?? 0
+        const bv = statusOrder[b.processed_status] ?? 0
+        return av - bv
+      }
+      // 通用处理其他列
+      const av = (a as Record<string, unknown>)[key]
+      const bv = (b as Record<string, unknown>)[key]
+      const as = String(av ?? '')
+      const bs = String(bv ?? '')
+      return as.localeCompare(bs, 'zh-Hans-CN')
+    })
+    return order === 'descend' ? sorted.reverse() : sorted
+  }, [data, sortState])
+
   useEffect(() => {
     if (!onPageRowsChange) return
     const start = Math.max(0, (currentPage - 1) * pageSize)
     const end = Math.max(start, start + pageSize)
-    onPageRowsChange(data.slice(start, end))
-  }, [currentPage, data, onPageRowsChange, pageSize])
+    onPageRowsChange(sortedData.slice(start, end)) // Use sortedData here
+  }, [currentPage, sortedData, onPageRowsChange, pageSize])
 
   const titleOption = useMemo(() => metaColumns.find((c) => c.key === TITLE_KEY) ?? null, [metaColumns])
   const visibleMeta = useMemo(() => metaColumns.filter((c) => c.key !== TITLE_KEY), [metaColumns])
   const visibleAnalysis = useMemo(
     () => (view === 'matrix' ? (analysisColumns ?? []) : []),
     [analysisColumns, view]
+  )
+
+  /**
+   * 优化：使用 useCallback 缓存点击处理器
+   * 避免每次渲染时为每一行创建新的函数引用，减少不必要的 DOM 更新
+   */
+  const handleTitleClick = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      const itemKey = e.currentTarget.dataset.itemKey
+      if (itemKey) onOpenDetail(itemKey)
+    },
+    [onOpenDetail]
   )
 
   const visibleKeys = useMemo(() => {
@@ -481,7 +569,9 @@ export function LiteratureTable({
         }),
         fixed: 'left',
         sorter: (a, b) => (a.title || '').localeCompare(b.title || '', 'zh-Hans-CN'),
-        sortDirections: ['ascend', 'descend'],
+        defaultSortOrder: sortState.key === TITLE_KEY ? sortState.order : undefined,
+        sortOrder: sortState.key === TITLE_KEY ? sortState.order : undefined,
+        sortDirections: ['ascend', 'descend', 'ascend'],
         onHeaderCell: () =>
         ({
           width: getColCssVar(TITLE_KEY),
@@ -491,7 +581,8 @@ export function LiteratureTable({
         render: (_, record) => (
           <button
             type="button"
-            onClick={() => onOpenDetail(record.item_key)}
+            data-item-key={record.item_key}
+            onClick={handleTitleClick}
             className={
               view === 'zotero' || view === 'matrix'
                 ? 'matrixit-title-link block whitespace-pre-wrap break-words [overflow-wrap:anywhere]'
@@ -522,11 +613,11 @@ export function LiteratureTable({
           sorter: (a, b) => {
             const av = (a as Record<string, unknown>)[colKey]
             const bv = (b as Record<string, unknown>)[colKey]
-            const as = String(av ?? '')
-            const bs = String(bv ?? '')
-            return as.localeCompare(bs, 'zh-Hans-CN')
+            return String(av ?? '').localeCompare(String(bv ?? ''), 'zh-Hans-CN')
           },
-          sortDirections: ['ascend', 'descend'],
+          defaultSortOrder: sortState.key === colKey ? sortState.order : undefined,
+          sortOrder: sortState.key === colKey ? sortState.order : undefined,
+          sortDirections: ['ascend', 'descend', 'ascend'],
           render: (_, record) => {
             const v = (record as Record<string, unknown>)[colKey]
             if (v === null || v === undefined || v === '') {
@@ -560,10 +651,12 @@ export function LiteratureTable({
           onCell: () => ({ style: { minWidth: getMinWidth(STATUS_KEY) } }),
           fixed: 'right',
           sorter: (a, b) => {
-            const order: Record<ProcessingStatus, number> = { unprocessed: 0, processing: 1, done: 2, failed: 3 }
+            const order: Record<ProcessingStatus, number> = { unprocessed: 0, processing: 1, reanalyzing: 1.5, done: 2, failed: 3 }
             return (order[a.processed_status] ?? 0) - (order[b.processed_status] ?? 0)
           },
-          sortDirections: ['ascend', 'descend'],
+          defaultSortOrder: sortState.key === STATUS_KEY ? sortState.order : undefined,
+          sortOrder: sortState.key === STATUS_KEY ? sortState.order : undefined,
+          sortDirections: ['ascend', 'descend', 'ascend'],
           onHeaderCell: () =>
           ({
             width: getColCssVar(STATUS_KEY),
@@ -579,14 +672,14 @@ export function LiteratureTable({
 
       return [titleCol, ...metaCols, ...analysisCols, ...(statusCol ? [statusCol] : [])]
     },
-    [fixedWidthCols, getColCssVar, onOpenDetail, showStatus, startResize, titleOption?.label, view, visibleAnalysis, visibleMeta]
+    [fixedWidthCols, getColCssVar, handleTitleClick, showStatus, sortState.key, sortState.order, startResize, titleOption?.label, view, visibleAnalysis, visibleMeta]
   )
 
   return (
     <div ref={containerRef} className="h-full min-h-0 flex flex-col">
       <ProTable<LiteratureItem>
         rowKey="item_key"
-        dataSource={data}
+        dataSource={sortedData}
         columns={columns}
         size="small"
         search={false}
@@ -623,6 +716,12 @@ export function LiteratureTable({
         tableLayout="fixed"
         className="matrixit-table h-full min-h-0 flex flex-col [&_.ant-pro-table-list-toolbar]:hidden [&_.ant-table-wrapper]:flex-1 [&_.ant-table-wrapper]:min-h-0 [&_.ant-table-wrapper]:flex [&_.ant-table-wrapper]:flex-col [&_.ant-spin-nested-loading]:flex-1 [&_.ant-spin-nested-loading]:min-h-0 [&_.ant-spin-nested-loading]:flex [&_.ant-spin-nested-loading]:flex-col [&_.ant-spin-container]:flex-1 [&_.ant-spin-container]:min-h-0 [&_.ant-spin-container]:flex [&_.ant-spin-container]:flex-col [&_.ant-table]:flex-1 [&_.ant-table]:min-h-0 [&_.ant-table]:flex [&_.ant-table]:flex-col [&_.ant-table-container]:flex-1 [&_.ant-table-container]:min-h-0 [&_.ant-table-container]:flex [&_.ant-table-container]:flex-col [&_.ant-table-body]:flex-1 [&_.ant-table-body]:min-h-0 [&_.ant-table-body]:overflow-auto [&_.ant-table-content]:overflow-auto [&_.ant-pagination]:mt-auto"
         tableAlertRender={false}
+        onChange={(p, f, s) => {
+          const sorter = Array.isArray(s) ? s[0] : s
+          if (sorter && sorter.order) {
+            setSortState({ key: String(sorter.field), order: sorter.order })
+          }
+        }}
       />
     </div>
   )

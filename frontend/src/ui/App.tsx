@@ -3,7 +3,7 @@
  * 功能描述: 整个 React 应用的根组件，负责布局结构（Layout）、路由/视图切换、状态管理（文献库、配置、筛选）
  *           以及核心业务逻辑的协调（如加载文献库、调用分析、同步设置、定时刷新等）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react'
 import {
   ConfigProvider,
   Layout,
@@ -23,6 +23,7 @@ import {
   HomeOutlined,
   SearchOutlined,
   DeleteOutlined,
+  StopOutlined,
 } from '@ant-design/icons'
 import { homeDir } from '@tauri-apps/api/path'
 import { listen } from '@tauri-apps/api/event'
@@ -33,6 +34,7 @@ import {
   loadLibrary,
   formatCitations,
   startAnalysis as startAnalysisRpc,
+  stopAnalysis as stopAnalysisRpc,
   deleteExtractedData as deleteExtractedDataRpc,
   updateItem as updateItemRpc,
   readConfig,
@@ -47,6 +49,7 @@ import { SettingsPage, type SettingsScrollApi, type SettingsSectionKey } from '.
 import { ColumnSettingsPopover } from './components/ColumnSettingsPopover'
 import { LiteratureFilterPopover } from './components/LiteratureFilterPopover'
 import { LiteratureDetailDrawer, type LiteratureDetailDrawerMode } from './components/LiteratureDetailDrawer'
+import { ConfirmModal } from './components/ConfirmModal'
 
 const { Sider, Content } = Layout
 
@@ -191,27 +194,53 @@ export default function App() {
     return cached ? { collections: cached.collections, items: cached.items } : { collections: [], items: [] }
   })
   // --- 状态定义：UI 交互与筛选 ---
-  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [activeView, setActiveView] = useState(() => readString(ACTIVE_VIEW_KEY) ?? 'zotero')
+  const [zoteroSelectedRowKeys, setZoteroSelectedRowKeys] = useState<React.Key[]>([])
+  const [matrixSelectedRowKeys, setMatrixSelectedRowKeys] = useState<React.Key[]>([])
+
+  const selectedRowKeys = useMemo(() => {
+    return activeView === 'matrix' ? matrixSelectedRowKeys : zoteroSelectedRowKeys
+  }, [activeView, matrixSelectedRowKeys, zoteroSelectedRowKeys])
+
+  const setSelectedRowKeys = useCallback((keys: React.Key[]) => {
+    if (activeView === 'matrix') {
+      setMatrixSelectedRowKeys(keys)
+    } else {
+      setZoteroSelectedRowKeys(keys)
+    }
+  }, [activeView])
+
   const [activeCollectionKey, setActiveCollectionKey] = useState<string | null>(() => readString(ACTIVE_COLLECTION_KEY))
   const [activeItemKey, setActiveItemKey] = useState<string | null>(null)
-  const [filterMode, setFilterMode] = useState<FilterMode>('all')
+  // 初始化 filterMode 时需考虑 activeView 从 localStorage 恢复的情况：
+  // 若初始视图为 matrix，则筛选模式应为 processed（仅显示已处理文献）
+  const [filterMode, setFilterMode] = useState<FilterMode>(() =>
+    (readString(ACTIVE_VIEW_KEY) ?? 'zotero') === 'matrix' ? 'processed' : 'all'
+  )
   const zoteroFilterModeRef = useRef<FilterMode>('all')
   const [filterPopoverOpen, setFilterPopoverOpen] = useState(false)
-  const [fieldFilterMatch, setFieldFilterMatch] = useState<'all' | 'any'>('all')
-  const [fieldFilterYearOp, setFieldFilterYearOp] = useState<'eq' | 'gt' | 'lt'>('eq')
-  const [fieldFilterYear, setFieldFilterYear] = useState('')
-  const [fieldFilterType, setFieldFilterType] = useState('')
-  const [fieldFilterPublications, setFieldFilterPublications] = useState('')
+  // 合并筛选状态为单个对象，减少状态更新时的重渲染次数
+  const [fieldFilter, setFieldFilter] = useState<{
+    match: 'all' | 'any'
+    yearOp: 'eq' | 'gt' | 'lt'
+    year: string
+    type: string
+    publications: string
+  }>({ match: 'all', yearOp: 'eq', year: '', type: '', publications: '' })
   const [searchQuery, setSearchQuery] = useState('')
   const [searchPopoverOpen, setSearchPopoverOpen] = useState(false)
   const [columnsPopoverOpen, setColumnsPopoverOpen] = useState(false)
   const searchInputElRef = useRef<HTMLInputElement | null>(null)
-  const [activeView, setActiveView] = useState(() => readString(ACTIVE_VIEW_KEY) ?? 'zotero')
+
   const [mode, setMode] = useState<'workbench' | 'settings'>('workbench')
   const [settingsSection, setSettingsSection] = useState<SettingsSectionKey>('zotero')
   const [settingsLoading, setSettingsLoading] = useState(false)
   const [settingsSaving, setSettingsSaving] = useState(false)
+
   const [deletingExtracted, setDeletingExtracted] = useState(false)
+  const [analysisInProgress, setAnalysisInProgress] = useState(false)
+  const [stoppingAnalysis, setStoppingAnalysis] = useState(false)
+  const [confirmModal, setConfirmModal] = useState<{ open: boolean; type: 'delete' | 'analyze' | 'stop' | 'mixed_analyze' }>({ open: false, type: 'delete' })
   const [rawConfig, setRawConfig] = useState<Record<string, unknown>>({})
   const [rawFields, setRawFields] = useState<Record<string, unknown>>({})
   const [configForm] = Form.useForm()
@@ -240,6 +269,7 @@ export default function App() {
 
   const citationCacheRef = useRef<Map<string, { dateModified: unknown; text: string }>>(new Map())
   const citationsInFlightRef = useRef<Set<string>>(new Set())
+  const analysisInProgressRef = useRef(false)
   const [citationsTick, setCitationsTick] = useState(0)
 
   // --- Memo：配置解析 ---
@@ -470,7 +500,48 @@ export default function App() {
       if (trigger === 'manual') message.destroy(msgKey)
       try {
         const next = await loadLibrary()
-        setLibrary(next)
+        // 刷新时保留前端正在处理的状态（processing/reanalyzing），防止后端旧数据覆盖
+        // 但如果分析已经终止（analysisInProgressRef.current === false），则不保留
+        setLibrary((prev) => {
+          // 如果分析不在进行中，需要清理后端返回的残留 processing 状态（脏数据）
+          if (!analysisInProgressRef.current) {
+            return {
+              ...next,
+              items: next.items.map((it) => {
+                // 将后端残留的 processing 状态清理为 unprocessed
+                if (it.processed_status === 'processing') {
+                  return { ...it, processed_status: 'unprocessed', processed_error: undefined }
+                }
+                // 将后端残留的 reanalyzing 状态恢复为 done
+                if (it.processed_status === 'reanalyzing') {
+                  return { ...it, processed_status: 'done', processed_error: undefined }
+                }
+                return it
+              }),
+            }
+          }
+          // 分析进行中时，保留前端的 processing/reanalyzing 状态
+          const processingKeys = new Map<string, LiteratureItem>()
+          for (const it of prev.items) {
+            if (it.processed_status === 'processing' || it.processed_status === 'reanalyzing') {
+              processingKeys.set(it.item_key, it)
+            }
+          }
+          if (processingKeys.size === 0) {
+            return next
+          }
+          return {
+            ...next,
+            items: next.items.map((it) => {
+              const preserved = processingKeys.get(it.item_key)
+              if (preserved) {
+                // 保留前端的分析状态
+                return { ...it, processed_status: preserved.processed_status, processed_error: preserved.processed_error }
+              }
+              return it
+            }),
+          }
+        })
         writeLibraryCache({ savedAt: Date.now(), collections: next.collections, items: next.items })
         setLastRefreshAt(Date.now())
         const keys = collectCollectionKeys(next.collections)
@@ -829,55 +900,52 @@ export default function App() {
       filterMode === 'all'
         ? collectionItems
         : filterMode === 'unprocessed'
-          ? collectionItems.filter((it) => it.processed_status !== 'done')
-          : collectionItems.filter((it) => it.processed_status === 'done')
+          ? collectionItems.filter((it) => it.processed_status !== 'done' && it.processed_status !== 'reanalyzing')
+          : collectionItems.filter((it) => it.processed_status === 'done' || it.processed_status === 'reanalyzing')
 
     const q = normalizedSearchQuery
     const normalizeText = (v: unknown) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
 
-    const byFieldFilter =
-      activeView === 'matrix'
-        ? byStatus
-        : (() => {
-          const predicates: Array<(it: LiteratureItem) => boolean> = []
+    const byFieldFilter = (() => {
+      const predicates: Array<(it: LiteratureItem) => boolean> = []
 
-          const yearRaw = fieldFilterYear.trim()
-          if (yearRaw) {
-            const targetYear = Number.parseInt(yearRaw, 10)
-            if (Number.isFinite(targetYear)) {
-              predicates.push((it) => {
-                const raw = String((it as unknown as Record<string, unknown>).year ?? '')
-                const y = Number.parseInt(raw.replace(/[^\d]/g, ''), 10)
-                if (!Number.isFinite(y)) return false
-                if (fieldFilterYearOp === 'gt') return y > targetYear
-                if (fieldFilterYearOp === 'lt') return y < targetYear
-                return y === targetYear
-              })
-            }
-          }
+      const yearRaw = fieldFilter.year.trim()
+      if (yearRaw) {
+        const targetYear = Number.parseInt(yearRaw, 10)
+        if (Number.isFinite(targetYear)) {
+          predicates.push((it) => {
+            const raw = String((it as unknown as Record<string, unknown>).year ?? '')
+            const y = Number.parseInt(raw.replace(/[^\d]/g, ''), 10)
+            if (!Number.isFinite(y)) return false
+            if (fieldFilter.yearOp === 'gt') return y > targetYear
+            if (fieldFilter.yearOp === 'lt') return y < targetYear
+            return y === targetYear
+          })
+        }
+      }
 
-          const typeRaw = fieldFilterType.trim()
-          if (typeRaw) {
-            const target = normalizeText(typeRaw)
-            predicates.push((it) => {
-              const v = ((it as unknown as Record<string, unknown>).type ?? it.bib_type ?? '') as unknown
-              return normalizeText(v) === target
-            })
-          }
+      const typeRaw = fieldFilter.type.trim()
+      if (typeRaw) {
+        const target = normalizeText(typeRaw)
+        predicates.push((it) => {
+          const v = ((it as unknown as Record<string, unknown>).type ?? it.bib_type ?? '') as unknown
+          return normalizeText(v) === target
+        })
+      }
 
-          const pubRaw = fieldFilterPublications.trim()
-          if (pubRaw) {
-            const target = normalizeText(pubRaw)
-            predicates.push((it) => {
-              const v = ((it as unknown as Record<string, unknown>).publications ?? '') as unknown
-              return normalizeText(v).includes(target)
-            })
-          }
+      const pubRaw = fieldFilter.publications.trim()
+      if (pubRaw) {
+        const target = normalizeText(pubRaw)
+        predicates.push((it) => {
+          const v = ((it as unknown as Record<string, unknown>).publications ?? '') as unknown
+          return normalizeText(v).includes(target)
+        })
+      }
 
-          if (predicates.length === 0) return byStatus
-          const matchAll = fieldFilterMatch === 'all'
-          return byStatus.filter((it) => (matchAll ? predicates.every((p) => p(it)) : predicates.some((p) => p(it))))
-        })()
+      if (predicates.length === 0) return byStatus
+      const matchAll = fieldFilter.match === 'all'
+      return byStatus.filter((it) => (matchAll ? predicates.every((p) => p(it)) : predicates.some((p) => p(it))))
+    })()
 
     if (!q) return byFieldFilter
 
@@ -889,11 +957,7 @@ export default function App() {
   }, [
     activeView,
     collectionItems,
-    fieldFilterMatch,
-    fieldFilterPublications,
-    fieldFilterType,
-    fieldFilterYear,
-    fieldFilterYearOp,
+    fieldFilter,
     filterMode,
     normalizedSearchQuery,
   ])
@@ -960,31 +1024,34 @@ export default function App() {
 
   /**
    * 核心操作：启动分析
-   * 1. 将选中的文献标记为 processing 状态
+   * 1. 将选中的文献标记为 processing/reanalyzing 状态
    * 2. 调用后端 RPC startAnalysis
    * 3. 监听后端通过 Channel 返回的 AnalysisEvent 事件流，实时更新 UI 状态
    */
-  const startAnalysis = async () => {
-    const keys = selectedRowKeys as string[]
+  const startAnalysis = async (customKeys?: string[]) => {
+    const keys = customKeys ?? (selectedRowKeys as string[])
     if (keys.length === 0) return
 
     const msgKey = 'analysis'
+
+    setAnalysisInProgress(true)
+    analysisInProgressRef.current = true
     setLibrary((prev) => ({
       ...prev,
-      items: prev.items.map((it) =>
-        keys.includes(it.item_key) ? { ...it, processed_status: 'processing', processed_error: undefined } : it
-      ),
+      items: prev.items.map((it) => {
+        if (!keys.includes(it.item_key)) return it
+        // 根据条目当前状态判断：已完成的条目是"重新分析"，否则是"新分析"
+        const isReanalyze = it.processed_status === 'done'
+        return { ...it, processed_status: isReanalyze ? 'reanalyzing' : 'processing', processed_error: undefined }
+      }),
     }))
     message.loading({ content: '正在分析…', key: msgKey, duration: 0 })
 
-    // 通过事件流驱动 UI 状态：目前仅消费 Started/Finished/Failed，Progress/AllDone 未用于 UI（后续可扩展进度条/队列完成提示）
+    // 通过事件流驱动 UI 状态
     const onEvent = (evt: AnalysisEvent) => {
       if (evt.event === 'Started') {
         const k = evt.data.item_key
-        setLibrary((prev) => ({
-          ...prev,
-          items: prev.items.map((it) => (it.item_key === k ? { ...it, processed_status: 'processing' } : it))
-        }))
+        // Started 时保持当前状态（processing 或 reanalyzing），不覆盖
       }
       if (evt.event === 'Finished') {
         const k = evt.data.item_key
@@ -995,15 +1062,27 @@ export default function App() {
       }
       if (evt.event === 'Failed') {
         const k = evt.data.item_key
+        const isCancelled = evt.data.error === 'CANCELLED'
         setLibrary((prev) => ({
           ...prev,
-          items: prev.items.map((it) =>
-            it.item_key === k ? { ...it, processed_status: 'failed', processed_error: evt.data.error } : it
-          )
+          items: prev.items.map((it) => {
+            if (it.item_key !== k) return it
+            if (isCancelled) {
+              // 重新分析被取消：恢复为 done（保留在矩阵视图）
+              // 新分析被取消：恢复为 unprocessed
+              const restoreStatus = it.processed_status === 'reanalyzing' ? 'done' : 'unprocessed'
+              return { ...it, processed_status: restoreStatus, processed_error: undefined }
+            }
+            return { ...it, processed_status: 'failed', processed_error: evt.data.error }
+          })
         }))
-        message.error(`分析失败(${k}): ${evt.data.error}`)
+        if (!isCancelled) {
+          message.error(`分析失败(${k}): ${evt.data.error}`)
+        }
       }
       if (evt.event === 'AllDone') {
+        setAnalysisInProgress(false)
+        analysisInProgressRef.current = false
         refreshLibrary('auto')
         message.success({ content: '分析完成', key: msgKey })
       }
@@ -1013,6 +1092,8 @@ export default function App() {
       await startAnalysisRpc(keys, onEvent)
     } catch (e) {
       const msg = e instanceof Error ? e.message : '启动分析失败'
+      setAnalysisInProgress(false)
+      analysisInProgressRef.current = false
       setLibrary((prev) => ({
         ...prev,
         items: prev.items.map((it) =>
@@ -1024,47 +1105,141 @@ export default function App() {
   }
 
   /**
-   * 核心操作：删除已提取数据
-   * 清除选中条目的分析结果字段，并同步删除飞书上的对应记录。
+   * UI 交互：请求分析
+   * 如果选中的条目包含混合状态（已完成+未完成），提示策略选择；
+   * 如果全是已完成，提示重新分析；
+   * 否则直接启动。
    */
-  const deleteExtractedData = async () => {
+  const handleAnalysisRequest = () => {
+    if (selectedRowKeys.length === 0) return
+    const items = library.items.filter((it) => selectedRowKeys.includes(it.item_key))
+    const total = items.length
+    const doneCount = items.filter((it) => it.processed_status === 'done').length
+
+    if (doneCount > 0 && doneCount < total) {
+      setConfirmModal({ open: true, type: 'mixed_analyze' })
+      return
+    }
+
+    if (doneCount > 0) {
+      setConfirmModal({ open: true, type: 'analyze' })
+    } else {
+      void startAnalysis()
+    }
+  }
+
+  /**
+   * UI 交互：请求终止分析
+   */
+  const handleStopAnalysisRequest = () => {
+    setConfirmModal({ open: true, type: 'stop' })
+  }
+
+  /**
+   * 确认终止分析
+   * 调用后端终止接口，前端主动更新状态（因为 taskkill 终止后事件流会中断）
+   */
+  const handleConfirmStopAnalysis = async () => {
+    setStoppingAnalysis(true)
+    try {
+      const res = await stopAnalysisRpc()
+      if (res.stopped) {
+        // 前端主动更新状态，因为 taskkill 强制终止后后端事件流会中断
+        // processing 恢复为 unprocessed，reanalyzing 恢复为 done
+        setLibrary((prev) => ({
+          ...prev,
+          items: prev.items.map((it) => {
+            if (it.processed_status === 'processing') {
+              return { ...it, processed_status: 'unprocessed', processed_error: undefined }
+            }
+            if (it.processed_status === 'reanalyzing') {
+              return { ...it, processed_status: 'done', processed_error: undefined }
+            }
+            return it
+          })
+        }))
+        setAnalysisInProgress(false)
+        analysisInProgressRef.current = false
+        message.info(`已终止分析，取消了 ${res.cancelled_count} 个待分析任务`)
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '终止分析失败'
+      message.error(msg)
+    } finally {
+      setStoppingAnalysis(false)
+      setConfirmModal((prev) => ({ ...prev, open: false }))
+    }
+  }
+
+  const handleConfirmAnalysis = () => {
+    void startAnalysis()
+    setConfirmModal((prev) => ({ ...prev, open: false }))
+  }
+
+  /**
+   * 核心操作：删除已提取数据 - 触发确认弹窗
+   */
+  const handleDeleteRequest = () => {
     const keys = selectedRowKeys as string[]
     if (keys.length === 0 || deletingExtracted) return
-
-    Modal.confirm({
-      title: '删除已提取数据',
-      content: `将清除 ${keys.length} 条文献的分析字段（不删除标题/作者/年份等元数据），并尝试删除飞书表格中的对应条目。`,
-      okText: '删除',
-      cancelText: '取消',
-      okButtonProps: { danger: true },
-      onOk: async () => {
-        setDeletingExtracted(true)
-        try {
-          const res = (await deleteExtractedDataRpc(keys)) as {
-            cleared?: number
-            missing?: number
-            analysis_fields?: number
-            feishu?: { deleted?: number; skipped?: number; failed?: number }
-          }
-          const cleared = Number(res?.cleared ?? 0)
-          const missing = Number(res?.missing ?? 0)
-          const feishuDeleted = Number(res?.feishu?.deleted ?? 0)
-          const feishuFailed = Number(res?.feishu?.failed ?? 0)
-
-          await handleRefresh()
-          setSelectedRowKeys([])
-
-          if (feishuFailed > 0) {
-            message.warning(`已清除 ${cleared} 条（缺失 ${missing} 条），飞书删除成功 ${feishuDeleted} 条，失败 ${feishuFailed} 条`)
-          } else {
-            message.success(`已清除 ${cleared} 条（缺失 ${missing} 条），飞书删除 ${feishuDeleted} 条`)
-          }
-        } finally {
-          setDeletingExtracted(false)
-        }
-      },
-    })
+    setConfirmModal({ open: true, type: 'delete' })
   }
+
+  /**
+   * 核心操作：确认删除已提取数据（乐观更新）
+   * 1. 立即更新前端状态
+   * 2. 立即清空选中项并关闭弹窗
+   * 3. 异步调用后端删除，完成后刷新同步真实状态
+   */
+  const handleConfirmDelete = async () => {
+    const keys = selectedRowKeys as string[]
+    if (keys.length === 0) {
+      setConfirmModal((prev) => ({ ...prev, open: false }))
+      return
+    }
+
+    // 1. 立即更新前端状态：将选中条目的状态设为 unprocessed
+    setLibrary((prev) => ({
+      ...prev,
+      items: prev.items.map((it) =>
+        keys.includes(it.item_key)
+          ? { ...it, processed_status: 'unprocessed', sync_status: 'unsynced' }
+          : it
+      ),
+    }))
+
+    // 2. 立即清空选中项并关闭弹窗
+    setSelectedRowKeys([])
+    setConfirmModal((prev) => ({ ...prev, open: false }))
+
+    // 3. 异步执行后端删除操作
+    setDeletingExtracted(true)
+    try {
+      const res = (await deleteExtractedDataRpc(keys)) as {
+        cleared?: number
+        missing?: number
+        analysis_fields?: number
+        feishu?: { deleted?: number; skipped?: number; failed?: number }
+      }
+      const cleared = Number(res?.cleared ?? 0)
+      const missing = Number(res?.missing ?? 0)
+      const feishuDeleted = Number(res?.feishu?.deleted ?? 0)
+      const feishuFailed = Number(res?.feishu?.failed ?? 0)
+
+      // 刷新同步真实状态
+      await handleRefresh()
+
+      if (feishuFailed > 0) {
+        message.warning(`已清除 ${cleared} 条（缺失 ${missing} 条），飞书删除成功 ${feishuDeleted} 条，失败 ${feishuFailed} 条`)
+      } else {
+        message.success(`已清除 ${cleared} 条（缺失 ${missing} 条），飞书删除 ${feishuDeleted} 条`)
+      }
+    } finally {
+      setDeletingExtracted(false)
+    }
+  }
+
+
 
   const segmentedOptions: { label: string; value: string }[] = [
     { label: 'Zotero库', value: 'zotero' },
@@ -1252,11 +1427,16 @@ export default function App() {
               )}
             </Sider>
             <Content className="flex flex-col overflow-hidden min-h-0 relative p-4 pt-10 gap-4">
-              <div data-tauri-drag-region className="absolute top-0 left-0 right-0 h-10" />
+              {/* 顶部拖拽区域：避开右上角窗口控制按钮 (约140px宽)，防止点击穿透 */}
+              <div data-tauri-drag-region className="absolute top-0 left-0 right-36 h-10" />
               {mode === 'workbench' ? (
                 <div className="flex-1 min-h-0 bg-white rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 overflow-hidden flex flex-col relative">
-                  <div data-tauri-drag-region className="flex justify-between items-center shrink-0 px-4 py-3 border-b border-slate-100">
-                    <div data-tauri-drag-region="false">
+                  {/* 工具栏：整体禁用拖拽，用户可通过顶部专用区域拖动窗口 */}
+                  <div
+                    data-tauri-drag-region="false"
+                    className="flex justify-between items-center shrink-0 px-4 py-3 border-b border-slate-100"
+                  >
+                    <div>
                       <Segmented
                         value={activeView}
                         onChange={(value) => {
@@ -1274,7 +1454,7 @@ export default function App() {
                       />
                     </div>
 
-                    <div data-tauri-drag-region="false" className="flex items-center gap-3">
+                    <div className="flex items-center gap-3">
                       <span className="text-xs secondary-color">已选 {selectedRowKeys.length} 条</span>
 
                       <Space size={8}>
@@ -1322,23 +1502,27 @@ export default function App() {
                         <LiteratureFilterPopover
                           open={filterPopoverOpen}
                           onOpenChange={setFilterPopoverOpen}
-                          disabled={activeView === 'matrix'}
+                          disabled={false}
+                          hideStatus={activeView === 'matrix'}
                           themePrimaryColor={themeToken.colorPrimary}
                           value={{
                             statusMode: filterMode,
-                            match: fieldFilterMatch,
-                            yearOp: fieldFilterYearOp,
-                            year: fieldFilterYear,
-                            type: fieldFilterType,
-                            publications: fieldFilterPublications,
+                            match: fieldFilter.match,
+                            yearOp: fieldFilter.yearOp,
+                            year: fieldFilter.year,
+                            type: fieldFilter.type,
+                            publications: fieldFilter.publications,
                           }}
                           onChange={(next) => {
+                            // 使用单次状态更新减少重渲染（之前是6次独立的setState）
                             setFilterMode(next.statusMode)
-                            setFieldFilterMatch(next.match)
-                            setFieldFilterYearOp(next.yearOp)
-                            setFieldFilterYear(next.year)
-                            setFieldFilterType(next.type)
-                            setFieldFilterPublications(next.publications)
+                            setFieldFilter({
+                              match: next.match,
+                              yearOp: next.yearOp,
+                              year: next.year,
+                              type: next.type,
+                              publications: next.publications,
+                            })
                           }}
                           yearOptions={filterYearOptions}
                           typeOptions={filterTypeOptions}
@@ -1355,16 +1539,45 @@ export default function App() {
                           applyMetaPanelChange={applyMetaPanelChange}
                           applyAnalysisPanelChange={applyAnalysisPanelChange}
                         />
-                        <Button key="analyze" type="primary" icon={<PlayCircleOutlined />} onClick={startAnalysis} disabled={selectedRowKeys.length === 0}>
-                          开始分析
-                        </Button>
+                        {analysisInProgress ? (
+                          <Button
+                            key="stop_analyze"
+                            danger
+                            icon={<StopOutlined />}
+                            onClick={handleStopAnalysisRequest}
+                            loading={stoppingAnalysis}
+                          >
+                            {stoppingAnalysis ? '终止中' : '终止分析'}
+                          </Button>
+                        ) : (
+                          <Button
+                            key="analyze"
+                            type="primary"
+                            icon={<PlayCircleOutlined />}
+                            onClick={handleAnalysisRequest}
+                            disabled={selectedRowKeys.length === 0}
+                          >
+                            {library.items.some((it) => selectedRowKeys.includes(it.item_key) && it.processed_status === 'done')
+                              ? '重新分析'
+                              : '开始分析'}
+                          </Button>
+                        )}
                         {activeView === 'matrix' ? (
                           <Button
                             key="delete_extracted"
                             danger
                             icon={<DeleteOutlined />}
-                            onClick={deleteExtractedData}
-                            disabled={selectedRowKeys.length === 0 || deletingExtracted}
+                            onClick={handleDeleteRequest}
+                            disabled={
+                              selectedRowKeys.length === 0 ||
+                              deletingExtracted ||
+                              library.items.some((it) => selectedRowKeys.includes(it.item_key) && it.processed_status === 'reanalyzing')
+                            }
+                            title={
+                              library.items.some((it) => selectedRowKeys.includes(it.item_key) && it.processed_status === 'reanalyzing')
+                                ? '重新分析中的条目无法删除'
+                                : undefined
+                            }
                           >
                           </Button>
                         ) : null}
@@ -1435,6 +1648,108 @@ export default function App() {
               }
             />
           ) : null}
+          <ConfirmModal
+            open={confirmModal.open}
+            onCancel={() => setConfirmModal((prev) => ({ ...prev, open: false }))}
+            onConfirm={
+              confirmModal.type === 'delete'
+                ? handleConfirmDelete
+                : confirmModal.type === 'stop'
+                  ? handleConfirmStopAnalysis
+                  : handleConfirmAnalysis
+            }
+            title={
+              confirmModal.type === 'delete'
+                ? '确认删除分析与矩阵数据'
+                : confirmModal.type === 'stop'
+                  ? '确认终止分析'
+                  : confirmModal.type === 'mixed_analyze'
+                    ? '确认分析策略'
+                    : '确认重新分析'
+            }
+            type={confirmModal.type === 'delete' || confirmModal.type === 'stop' ? 'danger' : 'primary'}
+            content={
+              confirmModal.type === 'mixed_analyze' ? (
+                <div className="flex flex-col gap-2">
+                  <p className="text-base">
+                    选中 <span className="font-bold">{selectedRowKeys.length}</span> 条文献，其中 <span className="font-bold text-orange-500">{library.items.filter(it => selectedRowKeys.includes(it.item_key) && it.processed_status === 'done').length}</span> 条已完成。
+                  </p>
+                  <p className="text-sm text-slate-500">
+                    请选择您希望执行的分析策略。
+                  </p>
+                </div>
+              ) : confirmModal.type === 'delete' ? (
+                <div className="flex flex-col gap-2">
+                  <p className="text-base">
+                    确定要清除选中的 <span className="font-bold text-red-600">{selectedRowKeys.length}</span> 条文献的分析结果吗？
+                  </p>
+                  <ul className="list-disc pl-5 text-slate-500 text-sm space-y-1">
+                    <li>文献的分析字段将被清空</li>
+                    <li>条目将从“文献矩阵”视图中移除（回到“未处理”状态）</li>
+                    <li>Zotero 中的原始条目不会被删除</li>
+                    <li>如果已同步到飞书，飞书对应记录将尝试被删除</li>
+                  </ul>
+                </div>
+              ) : confirmModal.type === 'stop' ? (
+                <div className="flex flex-col gap-2">
+                  <p className="text-base">
+                    确定要终止当前的分析任务吗？
+                  </p>
+                  <ul className="list-disc pl-5 text-slate-500 text-sm space-y-1">
+                    <li>已完成的分析结果会保留</li>
+                    <li>正在分析和待分析的条目将被取消</li>
+                  </ul>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <p className="text-base">
+                    确定要重新分析选中的 <span className="font-bold text-[var(--primary-color)]">{selectedRowKeys.length}</span> 条文献吗？
+                  </p>
+                  <ul className="list-disc pl-5 text-slate-500 text-sm space-y-1">
+                    <li>现有的分析结果将被覆盖</li>
+                    <li>分析过程可能需要一些时间</li>
+                  </ul>
+                </div>
+              )
+            }
+            confirmText={
+              confirmModal.type === 'delete'
+                ? '删除'
+                : confirmModal.type === 'stop'
+                  ? '终止'
+                  : '重新分析'
+            }
+            loading={
+              confirmModal.type === 'delete'
+                ? deletingExtracted
+                : confirmModal.type === 'stop'
+                  ? stoppingAnalysis
+                  : false
+            }
+            footer={
+              confirmModal.type === 'mixed_analyze' ? (
+                <div className="flex gap-2">
+                  <Button onClick={() => setConfirmModal((prev) => ({ ...prev, open: false }))}>
+                    取消
+                  </Button>
+                  <Button onClick={() => {
+                    void startAnalysis()
+                    setConfirmModal((prev) => ({ ...prev, open: false }))
+                  }}>
+                    重新分析全部
+                  </Button>
+                  <Button type="primary" onClick={() => {
+                    const items = library.items.filter((it) => selectedRowKeys.includes(it.item_key))
+                    const todo = items.filter((it) => it.processed_status !== 'done').map((it) => it.item_key)
+                    void startAnalysis(todo)
+                    setConfirmModal((prev) => ({ ...prev, open: false }))
+                  }}>
+                    仅分析未处理
+                  </Button>
+                </div>
+              ) : undefined
+            }
+          />
         </div>
       </AntApp>
     </ConfigProvider>
@@ -1454,9 +1769,9 @@ function SettingsSidebar({
 }) {
   return (
     <div className="flex flex-col h-full bg-[var(--app-bg)] border-r border-slate-200">
-      <div data-tauri-drag-region className="px-4 py-3 flex items-center justify-between">
+      <div className="px-4 py-3 flex items-center justify-between">
         <div className="font-bold text-xl primary-color tracking-tight">设置</div>
-        <div data-tauri-drag-region="false" className="flex items-center gap-1">
+        <div className="flex items-center gap-1">
           <Button type="text" size="middle" icon={<HomeOutlined />} onClick={onGoHome} aria-label="返回首页" />
         </div>
       </div>

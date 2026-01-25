@@ -27,6 +27,7 @@ matrix-it/
 │  │     └─ components/
 │  │        ├─ AppSidebar.tsx      # 左侧集合树：搜索、展开/收起、选中态
 │  │        ├─ ColumnSettingsPopover.tsx # 字段设置弹层：列显隐/顺序，拖拽排序（带滚动/限高）
+│  │        ├─ ConfirmModal.tsx    # 通用确认弹窗（删除/终止/混合分析策略）
 │  │        ├─ LiteratureDetailDrawer.tsx # 详情抽屉：Zotero 只读 / 矩阵可编辑解析字段
 │  │        ├─ LiteratureTable.tsx # 文献表格：排序、拖拽调列宽、分页与选中态
 │  │        ├─ LiteratureFilterPopover.tsx # 文献筛选弹层：状态/年份/类型/出版物
@@ -100,6 +101,15 @@ matrix-it/
 2) `src-tauri/src/main.rs` 接收命令后，通过 `tauri_plugin_shell` 执行 `binaries/` 中的 sidecar（`matrixit-sidecar`）。  
 3) sidecar（由 `backend/matrixit_backend/sidecar.py` 打包）读取 Zotero 数据、直接从 Zotero storage 定位 PDF（不导出）、调用 LLM 生成结构化字段、同步飞书；并可按需生成 GB/T 7714 引用。结果写入本地 SQLite（主存），同时导出 `data/literature.json` 快照。  
 4) sidecar 输出 JSON（或进度事件），Rust 将其转发给前端渲染表格与详情。  
+
+### 5) 健壮的分析流程（2025.1 新增）
+
+为应对长时间的 LLM 分析任务，系统实现了完整的生命周期管理：
+
+- **中途终止**：前端可随时中断分析。后端使用 `taskkill /F /T /PID` 强制终止 sidecar 进程树（Windows），确保无残留后台进程。中断后，前端状态会自动回滚（新分析 → 未处理，重新分析 → 已完成）。
+- **重新分析 (Reanalyze)**：支持对"已完成"条目发起重新分析。状态会标记为 `reanalyzing`（橙色），与首次分析 (`processing`) 区分。
+- **混合策略**：当同时选中"已完成"和"未处理"条目时，系统会弹出策略选择框，允许用户"仅分析未处理"（只处理新条目）或"全部重新分析"。
+- **状态保护**：刷新动作 (`refreshLibrary`) 能够智能识别当前是否有正在进行的分析，防止后端旧数据覆盖前端的实时进度状态。  
 
 ## 开发服务器启动指南
 

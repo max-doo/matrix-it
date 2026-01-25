@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tauri::Emitter;
+use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -30,6 +32,18 @@ struct LoadLibraryResponse {
 }
 
 struct ZoteroWatchState(Mutex<Option<RecommendedWatcher>>);
+
+/// 分析任务状态管理
+/// - child: 当前运行的 sidecar 子进程句柄
+/// - pid: 子进程 PID（用于 taskkill 终止进程树）
+/// - cancelled: 取消标志，用于通知事件循环停止处理
+/// - pending_keys: 待处理的 item_keys（用于终止时识别未完成项）
+struct AnalysisState {
+    child: Mutex<Option<CommandChild>>,
+    pid: Mutex<Option<u32>>,
+    cancelled: AtomicBool,
+    pending_keys: Mutex<HashSet<String>>,
+}
 
 fn find_project_root() -> PathBuf {
   let mut cur = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -205,9 +219,22 @@ enum AnalysisEvent {
 #[tauri::command]
 async fn start_analysis(
   app: tauri::AppHandle,
+  state: tauri::State<'_, AnalysisState>,
   item_keys: Vec<String>,
   on_event: Channel<AnalysisEvent>,
 ) -> Result<(), ApiError> {
+  // 重置取消标志
+  state.cancelled.store(false, Ordering::SeqCst);
+  
+  // 记录待处理的 keys
+  {
+    let mut pending = state.pending_keys.lock().map_err(|_| ApiError::new("LOCK", "poisoned"))?;
+    pending.clear();
+    for k in &item_keys {
+      pending.insert(k.clone());
+    }
+  }
+
   ensure_sidecar_env();
   let cmd = app
     .shell()
@@ -216,9 +243,20 @@ async fn start_analysis(
     .arg("analyze")
     .arg(serde_json::to_string(&item_keys).map_err(|e| ApiError::new("JSON", e.to_string()))?);
 
-  let (mut rx, _child) = cmd
+  let (mut rx, child) = cmd
     .spawn()
     .map_err(|e| ApiError::new("SIDE_CAR_SPAWN_FAILED", e.to_string()))?;
+
+  // 保存子进程句柄和 PID 以支持终止
+  let child_pid = child.pid();
+  {
+    let mut guard = state.child.lock().map_err(|_| ApiError::new("LOCK", "poisoned"))?;
+    *guard = Some(child);
+  }
+  {
+    let mut pid_guard = state.pid.lock().map_err(|_| ApiError::new("LOCK", "poisoned"))?;
+    *pid_guard = Some(child_pid);
+  }
 
   let total = item_keys.len() as u32;
   let mut current: u32 = 0;
@@ -228,8 +266,15 @@ async fn start_analysis(
   let mut failed: HashSet<String> = HashSet::new();
   let mut terminated_code: Option<i32> = None;
   let mut last_error: Option<String> = None;
+  let mut was_cancelled = false;
 
   while let Some(event) = rx.recv().await {
+    // 检查是否被取消
+    if state.cancelled.load(Ordering::SeqCst) {
+      was_cancelled = true;
+      break;
+    }
+
     match event {
       tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
         let chunk = String::from_utf8_lossy(&line).to_string();
@@ -252,11 +297,19 @@ async fn start_analysis(
               if v.get("type").and_then(|x| x.as_str()) == Some("finished") {
                 current += 1;
                 finished.insert(item_key.clone());
+                // 从 pending 中移除已完成的
+                if let Ok(mut pending) = state.pending_keys.lock() {
+                  pending.remove(&item_key);
+                }
                 let _ = on_event.send(AnalysisEvent::Progress { item_key: item_key.clone(), current, total });
                 let _ = on_event.send(AnalysisEvent::Finished { item_key: item_key.clone() });
               }
               if v.get("type").and_then(|x| x.as_str()) == Some("failed") {
                 failed.insert(item_key.clone());
+                // 从 pending 中移除已失败的
+                if let Ok(mut pending) = state.pending_keys.lock() {
+                  pending.remove(&item_key);
+                }
                 let code = v
                   .get("error_code")
                   .and_then(|x| x.as_str())
@@ -296,6 +349,30 @@ async fn start_analysis(
     }
   }
 
+  // 清理子进程句柄
+  {
+    let mut guard = state.child.lock().map_err(|_| ApiError::new("LOCK", "poisoned"))?;
+    *guard = None;
+  }
+
+  // 如果被取消，为未完成的项发送 Cancelled 事件（复用 Failed 事件）
+  if was_cancelled {
+    let unresolved: Vec<String> = item_keys
+      .iter()
+      .filter(|k| !finished.contains(*k) && !failed.contains(*k))
+      .cloned()
+      .collect();
+    for k in &unresolved {
+      let _ = on_event.send(AnalysisEvent::Failed { item_key: k.clone(), error: "CANCELLED".to_string() });
+    }
+    // 清理 pending
+    if let Ok(mut pending) = state.pending_keys.lock() {
+      pending.clear();
+    }
+    let _ = on_event.send(AnalysisEvent::AllDone);
+    return Ok(());
+  }
+
   let unresolved: Vec<String> = item_keys
     .iter()
     .filter(|k| !finished.contains(*k) && !failed.contains(*k))
@@ -319,13 +396,81 @@ async fn start_analysis(
     for k in unresolved {
       let _ = on_event.send(AnalysisEvent::Failed { item_key: k, error: err.clone() });
     }
+    // 清理 pending
+    if let Ok(mut pending) = state.pending_keys.lock() {
+      pending.clear();
+    }
     let _ = on_event.send(AnalysisEvent::AllDone);
     return Err(ApiError::new("ANALYZE_FAILED", err));
+  }
+  
+  // 清理 pending
+  if let Ok(mut pending) = state.pending_keys.lock() {
+    pending.clear();
   }
   let _ = on_event.send(AnalysisEvent::AllDone);
   Ok(())
 }
 
+/// 终止正在进行的分析任务
+/// 只会终止分析中/待分析的任务，已完成的结果会保留
+#[tauri::command]
+fn stop_analysis(state: tauri::State<AnalysisState>) -> Result<serde_json::Value, ApiError> {
+  // 设置取消标志
+  state.cancelled.store(true, Ordering::SeqCst);
+  
+  // 获取 PID 用于 taskkill
+  let pid_to_kill: Option<u32> = {
+    let pid_guard = state.pid.lock().map_err(|_| ApiError::new("LOCK", "poisoned"))?;
+    *pid_guard
+  };
+  
+  // 使用 taskkill 终止进程树（Windows 上更可靠）
+  if let Some(pid) = pid_to_kill {
+    #[cfg(target_os = "windows")]
+    {
+      // taskkill /F /T /PID <pid> 强制终止进程树
+      let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .output();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+      // Unix 系统使用 kill -9
+      let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .output();
+    }
+  }
+  
+  // 同时调用 child.kill() 作为备选
+  {
+    let mut guard = state.child.lock().map_err(|_| ApiError::new("LOCK", "poisoned"))?;
+    if let Some(child) = guard.take() {
+      let _ = child.kill();
+    }
+  }
+  
+  // 清理 PID
+  {
+    let mut pid_guard = state.pid.lock().map_err(|_| ApiError::new("LOCK", "poisoned"))?;
+    *pid_guard = None;
+  }
+  
+  // 获取被取消的 keys 数量
+  let cancelled_count = {
+    if let Ok(pending) = state.pending_keys.lock() {
+      pending.len()
+    } else {
+      0
+    }
+  };
+  
+  Ok(serde_json::json!({
+    "stopped": true,
+    "cancelled_count": cancelled_count
+  }))
+}
 #[tauri::command]
 async fn sync_feishu(app: tauri::AppHandle, item_keys: Vec<String>) -> Result<serde_json::Value, ApiError> {
   ensure_sidecar_env();
@@ -469,6 +614,12 @@ async fn save_fields(next: serde_json::Value) -> Result<(), ApiError> {
 fn main() {
   tauri::Builder::default()
     .manage(ZoteroWatchState(Mutex::new(None)))
+    .manage(AnalysisState {
+      child: Mutex::new(None),
+      pid: Mutex::new(None),
+      cancelled: AtomicBool::new(false),
+      pending_keys: Mutex::new(HashSet::new()),
+    })
     .plugin(tauri_plugin_shell::init())
     .invoke_handler(tauri::generate_handler![
       start_zotero_watch,
@@ -476,6 +627,7 @@ fn main() {
       load_library,
       format_citations,
       start_analysis,
+      stop_analysis,
       sync_feishu,
       delete_extracted_data,
       update_item,

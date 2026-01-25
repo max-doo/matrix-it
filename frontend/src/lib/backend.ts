@@ -174,6 +174,19 @@ export async function startAnalysis(itemKeys: string[], onEvent: (evt: AnalysisE
 }
 
 /**
+ * 终止分析任务
+ * 仅终止待处理和进行中的任务，已完成的不受影响
+ */
+export async function stopAnalysis(): Promise<{ stopped: boolean; cancelled_count: number }> {
+  if (!isTauriRuntime()) return { stopped: true, cancelled_count: 0 }
+  try {
+    return await invoke<{ stopped: boolean; cancelled_count: number }>('stop_analysis')
+  } catch (e) {
+    throw normalizeInvokeError(e)
+  }
+}
+
+/**
  * 同步到飞书（返回值为后端响应的透传）。
  * 注意：失败兜底会返回全 0，UI 无法区分“确实为 0”还是“调用失败兜底为 0”。
  */

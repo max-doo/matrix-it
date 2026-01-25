@@ -11,26 +11,29 @@ import { CloseOutlined, MinusOutlined, BorderOutlined } from '@ant-design/icons'
  * - 在纯 Web 环境下 getCurrentWindow 可能不可用，因此做 try/catch 兜底
  * - 按钮区域需显式设置 data-tauri-drag-region="false"，避免与可拖拽区域冲突
  */
-export function TitleBar() {
-  let appWindow: ReturnType<typeof getCurrentWindow> | null = null
-  try {
-    appWindow = getCurrentWindow()
-  } catch {
-    appWindow = null
-  }
+// 在组件外获取 window 实例，避免重复调用
+let appWindow: ReturnType<typeof getCurrentWindow> | null = null
+try {
+  appWindow = getCurrentWindow()
+} catch {
+  appWindow = null
+}
 
+export function TitleBar() {
   return (
     <div className="fixed top-0 right-0 h-8 flex items-center z-50 select-none">
       <div className="flex h-full">
         <div
           data-tauri-drag-region="false"
           className="inline-flex justify-center items-center w-10 h-full hover:bg-black/5 cursor-pointer transition-colors"
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={async () => {
             if (!appWindow) return
             try {
               await appWindow.minimize()
             } catch {
-              return
+              // ignore
             }
           }}
         >
@@ -39,12 +42,14 @@ export function TitleBar() {
         <div
           data-tauri-drag-region="false"
           className="inline-flex justify-center items-center w-10 h-full hover:bg-black/5 cursor-pointer transition-colors"
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={async () => {
             if (!appWindow) return
             try {
               await appWindow.toggleMaximize()
             } catch {
-              return
+              // ignore
             }
           }}
         >
@@ -53,12 +58,14 @@ export function TitleBar() {
         <div
           data-tauri-drag-region="false"
           className="inline-flex justify-center items-center w-10 h-full hover:bg-red-500 hover:text-white cursor-pointer transition-colors"
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={async () => {
             if (!appWindow) return
             try {
               await appWindow.close()
             } catch {
-              return
+              // ignore
             }
           }}
         >

@@ -1,7 +1,9 @@
 {
   "identifier": "default",
   "description": "Default capabilities",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-close",
@@ -9,6 +11,7 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
     "shell:default",
+    "shell:allow-kill",
     {
       "identifier": "shell:allow-execute",
       "allow": [
@@ -16,6 +19,18 @@
           "name": "binaries/matrixit-sidecar",
           "sidecar": true,
           "args": true
+        },
+        {
+          "name": "taskkill",
+          "cmd": "taskkill",
+          "args": [
+            "/F",
+            "/T",
+            "/PID",
+            {
+              "validator": "\\d+"
+            }
+          ]
         }
       ]
     }

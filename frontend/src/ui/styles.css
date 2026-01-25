@@ -17,7 +17,19 @@
 [data-tauri-drag-region] [role="button"],
 [data-tauri-drag-region] .ant-btn,
 [data-tauri-drag-region] .ant-space,
-[data-tauri-no-drag] {
+[data-tauri-no-drag],
+/* Ant Design Portal 组件全局禁用拖拽，避免弹出层与窗口拖拽冲突 */
+.ant-popover,
+.ant-popover-content,
+.ant-dropdown,
+.ant-modal,
+.ant-modal-content,
+.ant-drawer,
+.ant-drawer-content,
+.ant-select-dropdown,
+.ant-picker-dropdown,
+[data-tauri-drag-region="false"],
+[data-tauri-drag-region="false"] * {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }

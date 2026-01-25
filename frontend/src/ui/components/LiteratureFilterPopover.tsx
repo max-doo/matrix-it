@@ -29,6 +29,7 @@ export type LiteratureFilterPopoverProps = {
   onChange: (next: LiteratureFilterPopoverValue) => void
   yearOptions: { value: string; label: string }[]
   typeOptions: { value: string; label: string }[]
+  hideStatus?: boolean
 }
 
 const hexToRgb = (hex: string): { r: number; g: number; b: number } | null => {
@@ -49,16 +50,17 @@ export function LiteratureFilterPopover({
   onChange,
   yearOptions,
   typeOptions,
+  hideStatus,
 }: LiteratureFilterPopoverProps) {
   const hasActiveFilters = useMemo(() => {
     if (disabled) return false
     return (
-      value.statusMode !== 'all' ||
+      (value.statusMode !== 'all' && !hideStatus) ||
       value.year.trim().length > 0 ||
       value.type.trim().length > 0 ||
       value.publications.trim().length > 0
     )
-  }, [disabled, value.publications, value.statusMode, value.type, value.year])
+  }, [disabled, value.publications, value.statusMode, value.type, value.year, hideStatus])
 
   const activeButtonStyle = useMemo(() => {
     if (!hasActiveFilters) return undefined
@@ -99,20 +101,23 @@ export function LiteratureFilterPopover({
 
       <div className="mt-3 px-1">
         <div className="max-h-[52vh] overflow-auto custom-scrollbar flex flex-col gap-1">
-          <div className="grid grid-cols-[56px_54px_minmax(160px,1fr)] items-center gap-x-1 gap-y-1">
-            <div className="h-8 flex items-center justify-end pr-1 text-sm text-slate-700 select-none">状态</div>
-            <div className="h-8 flex items-center justify-center text-sm text-slate-700 select-none">=</div>
-            <Select
-              value={value.statusMode}
-              onChange={(v) => update({ statusMode: v })}
-              className="w-full"
-              options={[
-                { value: 'all', label: '全部' },
-                { value: 'unprocessed', label: '未处理' },
-                { value: 'processed', label: '已处理' },
-              ]}
-            />
-          </div>
+          {/* 状态筛选：仅在 hideStatus 为 false 时显示 */}
+          {!hideStatus && (
+            <div className="grid grid-cols-[56px_54px_minmax(160px,1fr)] items-center gap-x-1 gap-y-1">
+              <div className="h-8 flex items-center justify-end pr-1 text-sm text-slate-700 select-none">状态</div>
+              <div className="h-8 flex items-center justify-center text-sm text-slate-700 select-none">=</div>
+              <Select
+                value={value.statusMode}
+                onChange={(v) => update({ statusMode: v })}
+                className="w-full"
+                options={[
+                  { value: 'all', label: '全部' },
+                  { value: 'unprocessed', label: '未处理' },
+                  { value: 'processed', label: '已处理' },
+                ]}
+              />
+            </div>
+          )}
 
           <div className="grid grid-cols-[56px_54px_minmax(160px,1fr)] items-center gap-x-1 gap-y-1">
             <div className="h-8 flex items-center justify-end pr-1 text-sm text-slate-700 select-none">年份</div>

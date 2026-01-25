@@ -199,14 +199,14 @@ export function SettingsPage({
 
   return (
     <div className="flex-1 min-h-0 bg-white rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 overflow-hidden flex flex-col relative">
-      <div data-tauri-drag-region className="flex justify-between items-center shrink-0 px-4 py-3 border-b border-slate-100">
-        <div data-tauri-drag-region="false" className="flex items-center gap-2">
+      <div className="flex justify-between items-center shrink-0 px-4 py-3 border-b border-slate-100">
+        <div className="flex items-center gap-2">
           <Button type="text" icon={<ArrowLeftOutlined />} onClick={onGoHome}>
             返回首页
           </Button>
         </div>
 
-        <div data-tauri-drag-region="false" className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
           <Button icon={<ReloadOutlined />} onClick={onReload} disabled={loading || saving}>
             重新载入
           </Button>

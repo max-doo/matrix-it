@@ -152,22 +152,12 @@
           ]
         },
         "meta": {
-          "hidden": [
-            "doi",
-            "collections",
-            "abstract"
-          ],
-          "order": [
+          "visible": [
             "title",
-            "citation",
-            "year",
-            "url",
             "author",
+            "year",
             "type",
-            "publications",
-            "abstract",
-            "doi",
-            "collections"
+            "publications"
           ]
         }
       },

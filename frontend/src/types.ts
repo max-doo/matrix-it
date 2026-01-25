@@ -15,7 +15,7 @@
  * - done: 分析完成
  * - failed: 分析失败
  */
-export type ProcessingStatus = 'unprocessed' | 'processing' | 'done' | 'failed'
+export type ProcessingStatus = 'unprocessed' | 'processing' | 'reanalyzing' | 'done' | 'failed'
 export type SyncStatus = 'unsynced' | 'syncing' | 'synced'
 
 export type FilterMode = 'all' | 'unprocessed' | 'processed'

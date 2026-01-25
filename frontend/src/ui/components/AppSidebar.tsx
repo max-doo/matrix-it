@@ -127,7 +127,7 @@ export function AppSidebar({ collections, activeKey, onSelect, zoteroStatus, ref
         <div data-tauri-drag-region className="flex-1 flex items-center min-w-0">
           <div className="font-bold text-xl primary-color tracking-tight select-none">MatrixIt</div>
         </div>
-        <div data-tauri-drag-region="false" className="flex items-center gap-1">
+        <div className="flex items-center gap-1">
           <Tooltip title={refreshTooltipTitle}>
             <Button
               type="text"
