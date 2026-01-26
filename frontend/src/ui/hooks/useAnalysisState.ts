@@ -3,7 +3,7 @@
  * 负责文献分析的启动、停止、状态更新和UI交互
  */
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback } from 'react'
 import { message } from 'antd'
 import type { AnalysisEvent, LiteratureItem } from '../../types'
 import { startAnalysis as startAnalysisRpc, stopAnalysis as stopAnalysisRpc, deleteExtractedData as deleteExtractedDataRpc } from '../../lib/backend'
@@ -19,10 +19,6 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
     const [analysisInProgress, setAnalysisInProgress] = useState(false)
     const [stoppingAnalysis, setStoppingAnalysis] = useState(false)
     const [deletingExtracted, setDeletingExtracted] = useState(false)
-    const [confirmModal, setConfirmModal] = useState<{ open: boolean; type: 'delete' | 'analyze' | 'stop' | 'mixed_analyze' }>({
-        open: false,
-        type: 'delete',
-    })
 
     /**
      * 核心操作：启动分析
@@ -113,34 +109,6 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
     }, [selectedRowKeys, setLibrary, handleRefresh])
 
     /**
-     * UI 交互：请求分析
-     */
-    const handleAnalysisRequest = useCallback(() => {
-        if (selectedRowKeys.length === 0) return
-        const items = library.items.filter((it) => selectedRowKeys.includes(it.item_key))
-        const total = items.length
-        const doneCount = items.filter((it) => it.processed_status === 'done').length
-
-        if (doneCount > 0 && doneCount < total) {
-            setConfirmModal({ open: true, type: 'mixed_analyze' })
-            return
-        }
-
-        if (doneCount > 0) {
-            setConfirmModal({ open: true, type: 'analyze' })
-        } else {
-            void startAnalysis()
-        }
-    }, [selectedRowKeys, library.items, startAnalysis])
-
-    /**
-     * UI 交互：请求终止分析
-     */
-    const handleStopAnalysisRequest = useCallback(() => {
-        setConfirmModal({ open: true, type: 'stop' })
-    }, [])
-
-    /**
      * 确认终止分析
      */
     const handleConfirmStopAnalysis = useCallback(async () => {
@@ -172,23 +140,8 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
             message.error({ content: msg, key: msgKey })
         } finally {
             setStoppingAnalysis(false)
-            setConfirmModal((prev) => ({ ...prev, open: false }))
         }
     }, [setLibrary])
-
-    const handleConfirmAnalysis = useCallback(() => {
-        void startAnalysis()
-        setConfirmModal((prev) => ({ ...prev, open: false }))
-    }, [startAnalysis])
-
-    /**
-     * 核心操作：删除已提取数据 - 触发确认弹窗
-     */
-    const handleDeleteRequest = useCallback(() => {
-        const keys = selectedRowKeys as string[]
-        if (keys.length === 0 || deletingExtracted) return
-        setConfirmModal({ open: true, type: 'delete' })
-    }, [selectedRowKeys, deletingExtracted])
 
     /**
      * 核心操作：确认删除已提取数据（乐观更新）
@@ -196,7 +149,6 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
     const handleConfirmDelete = useCallback(async () => {
         const keys = selectedRowKeys as string[]
         if (keys.length === 0) {
-            setConfirmModal((prev) => ({ ...prev, open: false }))
             return
         }
 
@@ -212,7 +164,6 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
 
         // 2. 立即清空选中项并关闭弹窗
         setSelectedRowKeys([])
-        setConfirmModal((prev) => ({ ...prev, open: false }))
 
         // 3. 异步执行后端删除操作
         setDeletingExtracted(true)
@@ -246,14 +197,8 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
         analysisInProgressRef,
         stoppingAnalysis,
         deletingExtracted,
-        confirmModal,
-        setConfirmModal,
         startAnalysis,
-        handleAnalysisRequest,
-        handleStopAnalysisRequest,
         handleConfirmStopAnalysis,
-        handleConfirmAnalysis,
-        handleDeleteRequest,
         handleConfirmDelete,
     }
 }

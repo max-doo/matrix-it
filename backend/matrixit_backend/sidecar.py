@@ -205,16 +205,40 @@ def _analyze_parallel(
         ... (其他参数见 analyze 函数)
     """
     import asyncio
+    import os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
     from matrixit_backend import llm_async
     
     sys.stderr.write(f"[SIDECAR] 🚀 并行模式启动，并发数: {parallel_count}\n")
     sys.stderr.flush()
     
-    # 阶段 1: 串行准备任务数据
     tasks_data: List[dict] = []
-    items_map: Dict[str, dict] = {}  # item_key -> item
-    original_status_map: Dict[str, str] = {}  # item_key -> 原始状态
-    
+    items_map: Dict[str, dict] = {}
+    original_status_map: Dict[str, str] = {}
+    pdf_path_map: Dict[str, str] = {}
+
+    if not analysis_fields:
+        for k in keys:
+            it = idx.get(str(k))
+            if not it:
+                continue
+            restore_status = _analysis_restore_status(it.get("processed_status", "unprocessed"))
+            _analysis_restore_and_emit_failed(
+                db_path=db_path,
+                literature_json=literature_json,
+                it=it,
+                restore_status=restore_status,
+                export_snapshot=False,
+                payload={
+                    "type": "failed",
+                    "item_key": str(k),
+                    "error": "FIELDS_DEF_INVALID",
+                    "error_code": "FIELDS_DEF_INVALID",
+                    "message": "fields.json 缺少 analysis_fields 定义",
+                },
+            )
+        return
+
     for k in keys:
         it = idx.get(str(k))
         if not it:
@@ -236,8 +260,8 @@ def _analyze_parallel(
         except Exception:
             pass
         print(json.dumps({"type": "started", "item_key": str(k)}, ensure_ascii=False), flush=True)
-        
-        resolved_pdf, text = _analysis_resolve_pdf_and_text(it, zotero_dir, base_dir)
+
+        resolved_pdf = zotero.resolve_pdf_path(it, zotero_dir, base_dir=base_dir) or ""
         if not resolved_pdf:
             _analysis_restore_and_emit_failed(
                 db_path=db_path,
@@ -248,45 +272,62 @@ def _analyze_parallel(
                 payload={"type": "failed", "item_key": str(k), "error": "PDF_NOT_FOUND", "error_code": "PDF_NOT_FOUND"},
             )
             continue
-        if not text:
-            _analysis_restore_and_emit_failed(
-                db_path=db_path,
-                literature_json=literature_json,
-                it=it,
-                restore_status=restore_status,
-                export_snapshot=False,
-                payload={"type": "failed", "item_key": str(k), "error": "PDF_TEXT_EMPTY", "error_code": "PDF_TEXT_EMPTY"},
-            )
-            continue
-        
-        it["tldr"] = text.strip().replace("\n", " ")[:300]
 
-        if not analysis_fields:
-            _analysis_restore_and_emit_failed(
-                db_path=db_path,
-                literature_json=literature_json,
-                it=it,
-                restore_status=restore_status,
-                export_snapshot=False,
-                payload={
-                    "type": "failed",
-                    "item_key": str(k),
-                    "error": "FIELDS_DEF_INVALID",
-                    "error_code": "FIELDS_DEF_INVALID",
-                    "message": "fields.json 缺少 analysis_fields 定义",
-                },
-            )
-            continue
-        
-        # 构建消息
-        messages, _, _, _ = _analysis_build_messages(system_prompt, user_prompt, text, llm_cfg)
-        
-        tasks_data.append({
-            "item_key": str(k),
-            "messages": messages,
-        })
         items_map[str(k)] = it
-    
+        pdf_path_map[str(k)] = str(resolved_pdf)
+
+    if not items_map:
+        sys.stderr.write("[SIDECAR] 没有有效任务需要处理\n")
+        sys.stderr.flush()
+        return
+
+    cpu = os.cpu_count() or 2
+    pdf_workers = min(max(1, cpu - 1), max(1, min(int(parallel_count or 1), 6)))
+    sys.stderr.write(f"[SIDECAR] PDF 解析并发数: {pdf_workers}\n")
+    sys.stderr.flush()
+
+    futures_map = {}
+    with ProcessPoolExecutor(max_workers=pdf_workers) as executor:
+        for item_key, pdf_path in pdf_path_map.items():
+            futures_map[executor.submit(pdf.extract_pdf_text, pdf_path)] = item_key
+
+        for fut in as_completed(list(futures_map.keys())):
+            item_key = futures_map.get(fut) or ""
+            it = items_map.get(item_key)
+            if not it:
+                continue
+            restore_status = original_status_map.get(item_key, "unprocessed")
+            try:
+                text = fut.result() or ""
+            except Exception:
+                text = ""
+            if not text:
+                _analysis_restore_and_emit_failed(
+                    db_path=db_path,
+                    literature_json=literature_json,
+                    it=it,
+                    restore_status=restore_status,
+                    export_snapshot=False,
+                    payload={"type": "failed", "item_key": item_key, "error": "PDF_TEXT_EMPTY", "error_code": "PDF_TEXT_EMPTY"},
+                )
+                items_map.pop(item_key, None)
+                pdf_path_map.pop(item_key, None)
+                continue
+
+            it["tldr"] = text.strip().replace("\n", " ")[:300]
+            messages, user_content, _, _ = _analysis_build_messages(system_prompt, user_prompt, text, llm_cfg)
+            if llm_cfg.get("multimodal"):
+                tasks_data.append(
+                    {
+                        "item_key": item_key,
+                        "system_prompt": system_prompt,
+                        "user_content": user_content,
+                        "pdf_path": pdf_path_map.get(item_key, ""),
+                    }
+                )
+            else:
+                tasks_data.append({"item_key": item_key, "messages": messages})
+
     if not tasks_data:
         sys.stderr.write("[SIDECAR] 没有有效任务需要处理\n")
         sys.stderr.flush()
@@ -356,18 +397,51 @@ def _analyze_parallel(
                 "message": result.get("error", ""),
             }, ensure_ascii=False), flush=True)
     
-    # 执行异步任务
-    analyzer = llm_async.AsyncLLMAnalyzer(
-        parallel_count=parallel_count,
-        timeout=int(llm_cfg.get("timeout_s", 120)),
-    )
-    
-    asyncio.run(analyzer.analyze_batch(
-        tasks_data=tasks_data,
-        llm_cfg=llm_cfg,
-        on_progress=on_progress,
-        debug=lambda d: emit_debug(d.get("item_key", ""), "llm_async", d),
-    ))
+    if llm_async.is_async_available():
+        analyzer = llm_async.AsyncLLMAnalyzer(
+            parallel_count=parallel_count,
+            timeout=int(llm_cfg.get("timeout_s", 120)),
+        )
+        if llm_cfg.get("multimodal"):
+            asyncio.run(
+                analyzer.analyze_batch_responses(
+                    tasks_data=tasks_data,
+                    llm_cfg=llm_cfg,
+                    on_progress=on_progress,
+                    debug=lambda d: emit_debug(d.get("item_key", ""), "llm_async", d),
+                )
+            )
+        else:
+            asyncio.run(
+                analyzer.analyze_batch(
+                    tasks_data=tasks_data,
+                    llm_cfg=llm_cfg,
+                    on_progress=on_progress,
+                    debug=lambda d: emit_debug(d.get("item_key", ""), "llm_async", d),
+                )
+            )
+    else:
+        for task in tasks_data:
+            item_key = str(task.get("item_key") or "")
+            it = items_map.get(item_key)
+            if not it:
+                continue
+            restore_status = original_status_map.get(item_key, "unprocessed")
+            try:
+                if llm_cfg.get("multimodal"):
+                    pdf_path = str(task.get("pdf_path") or "")
+                    user_content = str(task.get("user_content") or "")
+                    llm_result = llm.responses_pdf_json(
+                        llm_cfg, system_prompt, user_content, pdf_path, debug=lambda d: emit_debug(item_key, "llm", d)
+                    )
+                else:
+                    messages = task.get("messages") or []
+                    llm_result = llm.chat_json(llm_cfg, messages, debug=lambda d: emit_debug(item_key, "llm", d))
+                on_progress({"item_key": item_key, "success": True, "result": llm_result})
+            except llm.LlmError as e:
+                on_progress({"item_key": item_key, "success": False, "error": e.message, "error_code": e.code})
+            except Exception as e:
+                on_progress({"item_key": item_key, "success": False, "error": str(e), "error_code": "LLM_REQUEST_FAILED"})
     
     # 最终导出 JSON
     try:

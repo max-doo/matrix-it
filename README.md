@@ -151,13 +151,15 @@ matrix-it/
 - `config/config.json`：默认配置（可提交，包含 `fields` 定义与 UI 列配置）
 - `config/config.local.json`：本机覆盖配置（建议不要提交）
 
-复制 [config.example.json](./config.example.json) 为 `config/config.local.json`，至少填写：
+复制 [config.local.example.json](./config/config.local.example.json) 为 `config/config.local.json`，至少填写：
 
 - Zotero：`zotero.data_dir`（需包含 `zotero.sqlite` 与 `storage/`）
 - 飞书：`feishu.app_id` / `feishu.app_secret` / `feishu.bitable_url`
   - `llm.base_url` / `llm.model` / `llm.api_key`（OpenAI-Style Chat Completions）
   - 可选：`llm.parallel_count` 设置并行分析数量（建议 3-5，默认为 1 串行）
+  - 可选：`llm.parallel_count_max` 设置并行数量强制上限（防止误配）
   - 可选：`llm.multimodal=true` 启用“多模态优先 + 文本回退”（会尝试 OpenAI-Style Responses 的 PDF 上传）
+  - 可选：`llm.multimodal_parallel_count_max` 设置多模态并行上限（建议 1-2，后端会强制裁剪）
   - 可选：`llm.max_pdf_bytes` 限制上传 PDF 的最大字节数
   - 可选：`llm.max_input_chars` 限制文本回退的最大字符数
   - 本地 SQLite：默认生成在 `data/matrixit.db`（可用环境变量 `MATRIXIT_DB` 覆盖路径）
@@ -338,7 +340,7 @@ python backend/matrixit_backend/pdf.py <pdf_path> all
   - 事件流：stdout 按条输出 `started/finished/failed`（含 `error_code`）
   - PDF 定位策略：优先 `pdf_path`（按项目根目录解析相对路径），否则用 Zotero storage 路径
   - LLM：按 `config/config.local.json` 的 `llm.base_url/model/api_key` 调用（OpenAI-Style）
-  - 并行：若 `config` 中设置 `llm.parallel_count > 1`，则启用并行加速（使用 `aiohttp + asyncio`）
+  - 并行：若 `config` 中设置 `llm.parallel_count > 1`，则启用并行加速（使用 `aiohttp + asyncio`）；实际并发会被 `llm.parallel_count_max` 与（多模态时）`llm.multimodal_parallel_count_max` 强制限制
 - 同步到飞书：
   ```bash
   python backend/matrixit_backend/sidecar.py sync_feishu "[\"<item_key>\"]"

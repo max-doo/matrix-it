@@ -6,9 +6,6 @@ import {
   App as AntApp,
   Segmented,
 } from 'antd'
-import {
-  ExclamationCircleOutlined,
-} from '@ant-design/icons'
 import zhCN from 'antd/locale/zh_CN'
 
 import type { LiteratureItem } from '../types'
@@ -18,7 +15,6 @@ import { TitleBar } from './components/TitleBar'
 import { SettingsPage } from './components/SettingsPage'
 import { SettingsSidebar } from './components/SettingsSidebar'
 import { LiteratureDetailDrawer, type LiteratureDetailDrawerMode } from './components/LiteratureDetailDrawer'
-import { ConfirmModal } from './components/ConfirmModal'
 import { WorkbenchToolbar } from './components/WorkbenchToolbar'
 import { useAppConfig } from './hooks/useAppConfig'
 import { useAppTheme } from './hooks/useAppTheme'
@@ -34,11 +30,104 @@ import { collectCollectionKeys } from './lib/collectionUtils'
 
 const { Sider, Content } = Layout
 
+type ConfirmApi = {
+  confirmDelete: (opts: { total: number; onOk: () => void | Promise<void> }) => void
+  confirmReanalyze: (opts: { total: number; onOk: () => void }) => void
+  confirmMixedAnalyze: (opts: {
+    total: number
+    done: number
+    unprocessed: number
+    onAnalyzeAll: () => void
+    onAnalyzeUnprocessed: () => void
+  }) => void
+  confirmStop: (opts: { onOk: () => void | Promise<void> }) => void
+}
+
+function ConfirmController({
+  apiRef,
+}: {
+  apiRef: React.MutableRefObject<ConfirmApi | null>
+}) {
+  const { modal } = AntApp.useApp()
+
+  useEffect(() => {
+    apiRef.current = {
+      confirmDelete: ({ total, onOk }) => {
+        void modal.confirm({
+          title: '删除已提取数据',
+          content: `将清除 ${total} 条文献的分析字段（不删除标题/作者/年份等元数据），并尝试删除飞书表格中的对应条目。`,
+          okText: '删除',
+          okButtonProps: { danger: true },
+          cancelText: '取消',
+          onOk: async () => {
+            await onOk()
+          },
+        })
+      },
+      confirmReanalyze: ({ total, onOk }) => {
+        void modal.confirm({
+          title: '重新分析确认',
+          content: `将重新分析已完成的 ${total} 条文献，是否继续？`,
+          okText: '确定',
+          cancelText: '取消',
+          onOk: () => onOk(),
+        })
+      },
+      confirmMixedAnalyze: ({ total, done, unprocessed, onAnalyzeAll, onAnalyzeUnprocessed }) => {
+        let inst: { destroy: () => void } | null = null
+        inst = modal.confirm({
+          title: '分析确认',
+          content: `已选 ${total} 条文献，其中已完成分析 ${done} 条。`,
+          okText: '分析全部',
+          okType: 'default',
+          cancelText: '取消',
+          onOk: () => onAnalyzeAll(),
+          footer: (_originNode, { OkBtn, CancelBtn }) => (
+            <>
+              <CancelBtn />
+              <OkBtn />
+              <Button
+                type="primary"
+                onClick={() => {
+                  inst?.destroy()
+                  onAnalyzeUnprocessed()
+                }}
+                disabled={unprocessed <= 0}
+              >
+                仅分析未完成（{unprocessed}）
+              </Button>
+            </>
+          ),
+        })
+      },
+      confirmStop: ({ onOk }) => {
+        void modal.confirm({
+          title: '终止分析确认',
+          content: '终止后会取消待分析任务，并恢复文献状态，是否继续？',
+          okText: '终止',
+          okButtonProps: { danger: true },
+          cancelText: '取消',
+          onOk: async () => {
+            await onOk()
+          },
+        })
+      },
+    }
+
+    return () => {
+      apiRef.current = null
+    }
+  }, [apiRef, modal])
+
+  return null
+}
+
 /**
  * 应用主组件：负责组装工作台/设置页布局，并将筛选、主题等状态委托给独立 hooks 管理。
  */
 export default function App() {
   const analysisInProgressRef = useRef(false)
+  const confirmApiRef = useRef<ConfirmApi | null>(null)
   const { library, setLibrary, refreshingLibrary, refreshError, setRefreshError, lastRefreshAt, refreshLibrary, handleRefresh } =
     useLibraryState(analysisInProgressRef)
   const [selectedRowKeysByView, setSelectedRowKeysByView] = useState<{ zotero: React.Key[]; matrix: React.Key[] }>({ zotero: [], matrix: [] })
@@ -112,14 +201,8 @@ export default function App() {
     analysisInProgress,
     stoppingAnalysis,
     deletingExtracted,
-    confirmModal,
-    setConfirmModal,
     startAnalysis: startAnalysis,
-    handleAnalysisRequest,
-    handleConfirmAnalysis,
-    handleDeleteRequest,
     handleConfirmDelete,
-    handleStopAnalysisRequest,
     handleConfirmStopAnalysis,
   } = useAnalysisState(library, setLibrary, selectedRowKeys, setSelectedRowKeys, handleRefresh, analysisInProgressRef)
   const { saveMatrixPatch } = useItemUpdater(setLibrary)
@@ -208,9 +291,6 @@ export default function App() {
       .filter((k): k is string => typeof k === 'string' && k.trim().length > 0)
     setTableSortedKeys(keys)
   }, [])
-  const closeConfirmModal = useCallback(() => {
-    setConfirmModal((prev) => ({ ...prev, open: false }))
-  }, [setConfirmModal])
 
   const selectedItemStats = useMemo(() => {
     const selected = new Set(selectedRowKeys.map((k) => String(k)))
@@ -229,10 +309,57 @@ export default function App() {
     const keys = library.items
       .filter((it) => selected.has(it.item_key) && it.processed_status !== 'done')
       .map((it) => it.item_key)
-    closeConfirmModal()
     if (keys.length === 0) return
     void startAnalysis(keys)
-  }, [closeConfirmModal, library.items, selectedRowKeys, startAnalysis])
+  }, [library.items, selectedRowKeys, startAnalysis])
+
+  const handleAnalysisRequest = useCallback(() => {
+    if (selectedRowKeys.length === 0) return
+    const selected = new Set(selectedRowKeys.map((k) => String(k)))
+    const items = library.items.filter((it) => selected.has(it.item_key))
+    const total = items.length
+    const doneCount = items.filter((it) => it.processed_status === 'done').length
+
+    if (doneCount > 0 && doneCount < total) {
+      confirmApiRef.current?.confirmMixedAnalyze({
+        total,
+        done: doneCount,
+        unprocessed: Math.max(0, total - doneCount),
+        onAnalyzeAll: () => {
+          void startAnalysis()
+        },
+        onAnalyzeUnprocessed: handleConfirmMixedAnalyzeUnprocessed,
+      })
+      return
+    }
+
+    if (doneCount > 0) {
+      confirmApiRef.current?.confirmReanalyze({
+        total,
+        onOk: () => {
+          void startAnalysis()
+        },
+      })
+      return
+    }
+
+    void startAnalysis()
+  }, [handleConfirmMixedAnalyzeUnprocessed, library.items, selectedRowKeys, startAnalysis])
+
+  const handleDeleteRequest = useCallback(() => {
+    const keys = selectedRowKeys as string[]
+    if (keys.length === 0 || deletingExtracted) return
+    confirmApiRef.current?.confirmDelete({
+      total: selectedItemStats.total,
+      onOk: handleConfirmDelete,
+    })
+  }, [deletingExtracted, handleConfirmDelete, selectedItemStats.total, selectedRowKeys])
+
+  const handleStopAnalysisRequest = useCallback(() => {
+    confirmApiRef.current?.confirmStop({
+      onOk: handleConfirmStopAnalysis,
+    })
+  }, [handleConfirmStopAnalysis])
 
   const segmentedOptions: { label: string; value: string }[] = [
     { label: 'Zotero库', value: 'zotero' },
@@ -265,6 +392,7 @@ export default function App() {
       }}
     >
       <AntApp>
+        <ConfirmController apiRef={confirmApiRef} />
         <div className="flex h-screen w-screen overflow-hidden bg-[var(--app-bg)]">
           <TitleBar />
           <Layout className="w-full h-full bg-transparent">
@@ -399,80 +527,6 @@ export default function App() {
 
           {mode === 'workbench' ? (
             <>
-              <ConfirmModal
-                open={confirmModal.open}
-                onCancel={closeConfirmModal}
-                title={
-                  confirmModal.type === 'delete'
-                    ? '删除已提取数据'
-                    : confirmModal.type === 'analyze'
-                      ? '重新分析确认'
-                      : confirmModal.type === 'mixed_analyze'
-                        ? '分析确认'
-                        : confirmModal.type === 'stop'
-                          ? (
-                            <span className="inline-flex items-center gap-2">
-                              <ExclamationCircleOutlined className="text-amber-600" />
-                              <span className="text-slate-900">终止分析确认</span>
-                            </span>
-                          )
-                          : '确认'
-                }
-                content={
-                  confirmModal.type === 'delete' ? (
-                    <div>将清除 {selectedItemStats.total} 条文献的分析字段（不删除标题/作者/年份等元数据），并尝试删除飞书表格中的对应条目。</div>
-                  ) : confirmModal.type === 'analyze' ? (
-                    <div>将重新分析已完成的 {selectedItemStats.total} 条文献，是否继续？</div>
-                  ) : confirmModal.type === 'mixed_analyze' ? (
-                    <div>
-                      已选 {selectedItemStats.total} 条文献，其中已完成分析 {selectedItemStats.done} 条。
-                    </div>
-                  ) : confirmModal.type === 'stop' ? (
-                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-                      <div className="flex items-start gap-2">
-                        <ExclamationCircleOutlined className="mt-0.5 text-amber-600" />
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold text-amber-900">将尝试终止当前分析任务</div>
-                          <div className="mt-1 text-sm leading-6 text-amber-800">
-                            终止后会取消待分析任务，并恢复文献状态，是否继续？
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null
-                }
-                type={confirmModal.type === 'delete' || confirmModal.type === 'stop' ? 'danger' : 'primary'}
-                confirmText={confirmModal.type === 'delete' ? '删除' : confirmModal.type === 'stop' ? '终止' : '确定'}
-                loading={confirmModal.type === 'stop' ? stoppingAnalysis : false}
-                onConfirm={
-                  confirmModal.type === 'delete'
-                    ? handleConfirmDelete
-                    : confirmModal.type === 'stop'
-                      ? handleConfirmStopAnalysis
-                      : handleConfirmAnalysis
-                }
-                footer={
-                  confirmModal.type === 'mixed_analyze' ? (
-                    <>
-                      <Button key="cancel" onClick={closeConfirmModal}>
-                        取消
-                      </Button>
-                      <Button key="reanalyze_all" onClick={handleConfirmAnalysis}>
-                        分析全部
-                      </Button>
-                      <Button
-                        key="only_unprocessed"
-                        type="primary"
-                        onClick={handleConfirmMixedAnalyzeUnprocessed}
-                        disabled={selectedItemStats.unprocessed <= 0}
-                      >
-                        仅分析未完成（{selectedItemStats.unprocessed}）
-                      </Button>
-                    </>
-                  ) : undefined
-                }
-              />
-
               <LiteratureDetailDrawer
                 item={activeItem}
                 mode={detailMode}
