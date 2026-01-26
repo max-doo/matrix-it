@@ -46,7 +46,12 @@ def load_llm_config(config: dict) -> Optional[dict]:
         return None
     api_key = str(llm_cfg.get("api_key") or "").strip()
     base_url = str(llm_cfg.get("base_url") or "").strip()
-    model = str(llm_cfg.get("model") or "").strip()
+    # model 可能是字符串或数组（前端 Select 组件存储为数组）
+    model_raw = llm_cfg.get("model")
+    if isinstance(model_raw, list):
+        model = str(model_raw[0]).strip() if model_raw else ""
+    else:
+        model = str(model_raw or "").strip()
     if not api_key or not base_url or not model:
         return None
     timeout_s = llm_cfg.get("timeout_s", 60)
@@ -177,6 +182,8 @@ def chat_json(
     Raises:
         LlmError: 当请求失败或无法解析 JSON 时抛出
     """
+    import sys
+    
     url = _chat_completions_url(str(llm_cfg["base_url"]))
     payload = {
         "model": llm_cfg["model"],
@@ -184,6 +191,32 @@ def chat_json(
         "temperature": llm_cfg.get("temperature", 0.2),
     }
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    
+    # 详细日志：请求信息
+    sys.stderr.write(f"\n{'='*60}\n")
+    sys.stderr.write(f"[LLM] POST {url}\n")
+    sys.stderr.write(f"[LLM] Model: {llm_cfg.get('model')}\n")
+    sys.stderr.write(f"[LLM] Temperature: {llm_cfg.get('temperature')}\n")
+    sys.stderr.write(f"[LLM] Timeout: {llm_cfg.get('timeout_s')}s\n")
+    sys.stderr.write(f"[LLM] Request body size: {len(data)} bytes\n")
+    
+    # 打印请求体预览（截断 messages 中的 content）
+    preview_payload = {
+        "model": payload["model"],
+        "temperature": payload["temperature"],
+        "messages": []
+    }
+    for msg in payload.get("messages", []):
+        preview_msg = {"role": msg.get("role", "")}
+        content = msg.get("content", "")
+        if len(content) > 500:
+            preview_msg["content"] = content[:500] + f"... (truncated, total {len(content)} chars)"
+        else:
+            preview_msg["content"] = content
+        preview_payload["messages"].append(preview_msg)
+    sys.stderr.write(f"[LLM] Request body preview:\n{json.dumps(preview_payload, ensure_ascii=False, indent=2)}\n")
+    sys.stderr.flush()
+    
     if debug:
         try:
             debug(
@@ -205,52 +238,93 @@ def chat_json(
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {llm_cfg['api_key']}",
+            "User-Agent": "MatrixIt/1.0.0",
         },
     )
     try:
         with urlopen(req, timeout=int(llm_cfg.get("timeout_s", 60))) as resp:
             raw = resp.read()
             body = raw.decode("utf-8", errors="replace")
+            status = getattr(resp, "status", None) or getattr(resp, "getcode", lambda: None)()
+            sys.stderr.write(f"[LLM] Response status: {status}\n")
+            sys.stderr.write(f"[LLM] Response size: {len(raw)} bytes\n")
+            sys.stderr.flush()
             if debug:
                 try:
                     debug(
                         {
-                            "status": getattr(resp, "status", None) or getattr(resp, "getcode", lambda: None)(),
+                            "status": status,
                             "response_bytes": len(raw),
                         }
                     )
                 except Exception:
                     pass
     except HTTPError as e:
-        raise LlmError("LLM_HTTP_ERROR", f"模型请求失败: HTTP {e.code}") from e
+        # 读取错误响应体
+        error_body = ""
+        try:
+            error_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        sys.stderr.write(f"[LLM] ❌ HTTP Error: {e.code}\n")
+        sys.stderr.write(f"[LLM] Error response:\n{error_body[:2000]}\n")
+        sys.stderr.write(f"{'='*60}\n")
+        sys.stderr.flush()
+        raise LlmError("LLM_HTTP_ERROR", f"模型请求失败: HTTP {e.code} - {error_body[:200]}") from e
     except URLError as e:
-        raise LlmError("LLM_NETWORK_ERROR", "模型网络请求失败") from e
+        sys.stderr.write(f"[LLM] ❌ Network Error: {e.reason}\n")
+        sys.stderr.write(f"{'='*60}\n")
+        sys.stderr.flush()
+        raise LlmError("LLM_NETWORK_ERROR", f"模型网络请求失败: {e.reason}") from e
     except Exception as e:
-        raise LlmError("LLM_REQUEST_FAILED", "模型请求失败") from e
+        sys.stderr.write(f"[LLM] ❌ Request Error: {e}\n")
+        sys.stderr.write(f"{'='*60}\n")
+        sys.stderr.flush()
+        raise LlmError("LLM_REQUEST_FAILED", f"模型请求失败: {e}") from e
 
+    # 打印响应体预览
+    sys.stderr.write(f"[LLM] Response body preview:\n{body[:1000]}{'...' if len(body) > 1000 else ''}\n")
+    sys.stderr.flush()
+    
     try:
         obj = json.loads(body)
     except Exception as e:
+        sys.stderr.write(f"[LLM] ❌ JSON parse error: {e}\n")
+        sys.stderr.write(f"{'='*60}\n")
+        sys.stderr.flush()
         raise LlmError("LLM_RESPONSE_INVALID", "模型响应不是有效 JSON") from e
 
     try:
         content = obj["choices"][0]["message"]["content"]
     except Exception as e:
+        sys.stderr.write(f"[LLM] ❌ Response structure error: missing choices/message/content\n")
+        sys.stderr.write(f"[LLM] Full response: {json.dumps(obj, ensure_ascii=False)[:1000]}\n")
+        sys.stderr.write(f"{'='*60}\n")
+        sys.stderr.flush()
         raise LlmError("LLM_RESPONSE_MISSING", "模型响应缺少 choices/message/content") from e
 
     content_str = str(content)
+    sys.stderr.write(f"[LLM] ✓ Content extracted: {len(content_str)} chars\n")
+    sys.stderr.write(f"[LLM] Content preview: {_safe_preview(content_str, 300)}\n")
+    
     if debug:
         try:
             debug({"content_preview": _safe_preview(content_str), "content_chars": len(content_str)})
         except Exception:
             pass
     parsed = _extract_json(content_str)
+    
+    sys.stderr.write(f"[LLM] ✓ JSON parsed, keys: {list(parsed.keys())}\n")
+    sys.stderr.write(f"{'='*60}\n")
+    sys.stderr.flush()
+    
     if debug:
         try:
             debug({"parsed_keys": list(parsed.keys())})
         except Exception:
             pass
     return parsed
+
 
 
 def responses_pdf_json(
@@ -325,6 +399,7 @@ def responses_pdf_json(
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {llm_cfg['api_key']}",
+            "User-Agent": "MatrixIt/1.0.0",
         },
     )
     try:
@@ -370,3 +445,4 @@ def responses_pdf_json(
         except Exception:
             pass
     return parsed
+

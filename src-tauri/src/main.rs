@@ -332,6 +332,8 @@ async fn start_analysis(
       }
       tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
         let chunk = String::from_utf8_lossy(&line).to_string();
+        // 实时打印 stderr 到控制台，方便调试
+        eprint!("{}", chunk);
         if stderr_buf.len() < 8000 {
           stderr_buf.push_str(&chunk);
           if stderr_buf.len() > 8000 {
@@ -661,6 +663,8 @@ fn main() {
       delete_extracted_data,
       update_item,
       read_config,
+      save_config,
+      read_fields,
       save_config,
       read_fields,
       save_fields

@@ -296,6 +296,10 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             , flush=True)
             continue
 
+        # 记录分析前的原始状态，用于失败时恢复
+        original_status = it.get("processed_status", "unprocessed")
+        # 根据原始状态决定恢复目标：done -> done, 其他 -> unprocessed
+        restore_status = "done" if original_status == "done" else "unprocessed"
         it["processed_status"] = "processing"
         try:
             storage.upsert_item(db_path, it)
@@ -324,7 +328,8 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
 
         resolved_pdf = zotero.resolve_pdf_path(it, zotero_dir, base_dir=base_dir) or ""
         if not resolved_pdf:
-            it["processed_status"] = "failed"
+            # 恢复原始状态，不写入 failed（failed 仅用于前端临时显示）
+            it["processed_status"] = restore_status
             it["sync_status"] = it.get("sync_status") or "unsynced"
             try:
                 storage.upsert_item(db_path, it)
@@ -346,7 +351,8 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
         emit_debug(str(k), "pdf_resolved", {"pdf_path": str(resolved_pdf)})
         text = pdf.extract_pdf_text(resolved_pdf)
         if not text:
-            it["processed_status"] = "failed"
+            # 恢复原始状态，不写入 failed
+            it["processed_status"] = restore_status
             it["sync_status"] = it.get("sync_status") or "unsynced"
             try:
                 storage.upsert_item(db_path, it)
@@ -369,7 +375,8 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
         it["tldr"] = text.strip().replace("\n", " ")[:300]
 
         if not analysis_fields:
-            it["processed_status"] = "failed"
+            # 恢复原始状态，不写入 failed
+            it["processed_status"] = restore_status
             it["sync_status"] = "unsynced"
             try:
                 storage.upsert_item(db_path, it)
@@ -391,7 +398,8 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             continue
 
         if not llm_cfg:
-            it["processed_status"] = "failed"
+            # 恢复原始状态，不写入 failed
+            it["processed_status"] = restore_status
             it["sync_status"] = "unsynced"
             try:
                 storage.upsert_item(db_path, it)
@@ -444,7 +452,8 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             if result is None:
                 result = llm.chat_json(llm_cfg, messages, debug=lambda d: emit_debug(str(k), "llm", d))
         except llm.LlmError as e:
-            it["processed_status"] = "failed"
+            # 恢复原始状态，不写入 failed
+            it["processed_status"] = restore_status
             it["sync_status"] = "unsynced"
             try:
                 storage.upsert_item(db_path, it)
@@ -465,7 +474,8 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             , flush=True)
             continue
         except Exception:
-            it["processed_status"] = "failed"
+            # 恢复原始状态，不写入 failed
+            it["processed_status"] = restore_status
             it["sync_status"] = "unsynced"
             try:
                 storage.upsert_item(db_path, it)
@@ -496,7 +506,8 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
                 },
             )
             if not accepted:
-                it["processed_status"] = "failed"
+                # 恢复原始状态，不写入 failed
+                it["processed_status"] = restore_status
                 it["sync_status"] = "unsynced"
                 try:
                     storage.upsert_item(db_path, it)
@@ -528,8 +539,11 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
         try:
             storage.upsert_item(db_path, it)
             storage.export_json(db_path, literature_json)
-        except Exception:
-            pass
+            sys.stderr.write(f"[SIDECAR] ✓ Item {k} saved to database and exported to JSON\n")
+            sys.stderr.flush()
+        except Exception as db_err:
+            sys.stderr.write(f"[SIDECAR] ❌ Failed to save item {k}: {db_err}\n")
+            sys.stderr.flush()
         print(json.dumps({"type": "finished", "item_key": str(k)}, ensure_ascii=False), flush=True)
 
 
@@ -724,6 +738,7 @@ def clear_citations(literature_json: str, db_path: str) -> dict:
         pass
     return {"cleared": changed}
 
+
  
 def _resolve_with_base(path_str: str, base_dir: str) -> str:
     p = Path(path_str)
@@ -798,6 +813,7 @@ def main() -> None:
             payload = {"collections": [], "items": [], "error": {"code": "LOAD_LIBRARY_FAILED", "message": str(e)}}
         sys.stdout.write(json.dumps(payload, ensure_ascii=False))
         return
+
 
     if cmd == "analyze":
         if len(sys.argv) < 3:

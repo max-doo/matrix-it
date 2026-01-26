@@ -64,19 +64,33 @@ export function useAnalysisState(
             if (evt.event === 'Failed') {
                 const k = evt.data.item_key
                 const isCancelled = evt.data.error === 'CANCELLED'
+                // 获取当前状态，用于判断恢复目标
+                let restoreTarget: 'done' | 'unprocessed' = 'unprocessed'
                 setLibrary((prev) => ({
                     ...prev,
                     items: prev.items.map((it) => {
                         if (it.item_key !== k) return it
+                        // 记录恢复目标：reanalyzing -> done, processing -> unprocessed
+                        restoreTarget = it.processed_status === 'reanalyzing' ? 'done' : 'unprocessed'
                         if (isCancelled) {
-                            const restoreStatus = it.processed_status === 'reanalyzing' ? 'done' : 'unprocessed'
-                            return { ...it, processed_status: restoreStatus, processed_error: undefined }
+                            return { ...it, processed_status: restoreTarget, processed_error: undefined }
                         }
                         return { ...it, processed_status: 'failed', processed_error: evt.data.error }
                     })
                 }))
                 if (!isCancelled) {
                     message.error(`分析失败(${k}): ${evt.data.error}`)
+                    // 5 秒后恢复到分析前的状态
+                    setTimeout(() => {
+                        setLibrary((prev) => ({
+                            ...prev,
+                            items: prev.items.map((it) =>
+                                it.item_key === k && it.processed_status === 'failed'
+                                    ? { ...it, processed_status: restoreTarget, processed_error: undefined }
+                                    : it
+                            )
+                        }))
+                    }, 5000)
                 }
             }
             if (evt.event === 'AllDone') {

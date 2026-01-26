@@ -294,3 +294,46 @@ export async function saveFields(next: Record<string, unknown>): Promise<{ saved
     }
   }
 }
+
+/**
+ * 获取模型列表
+ * 直接使用 fetch 调用 OpenAI 兼容的 /models 端点
+ * 这样可以利用系统代理，避免 Python urllib 的问题
+ */
+export async function listModels(apiKey: string, baseUrl: string): Promise<string[]> {
+  try {
+    const url = baseUrl.replace(/\/+$/, '')
+    const response = await fetch(`${url}/models`, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      }
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      let errorMessage = `HTTP ${response.status}`
+      try {
+        const errorData = JSON.parse(errorText)
+        errorMessage = errorData?.error?.message || errorData?.message || errorMessage
+      } catch {
+        if (errorText) errorMessage = `${errorMessage}: ${errorText.substring(0, 200)}`
+      }
+      throw new Error(errorMessage)
+    }
+
+    const data = await response.json()
+    // OpenAI 标准格式: {"data": [{"id": "model-id"}, ...]}
+    const models: string[] = []
+    if (data && Array.isArray(data.data)) {
+      for (const item of data.data) {
+        if (item && typeof item.id === 'string') {
+          models.push(item.id)
+        }
+      }
+    }
+    return models.sort()
+  } catch (e) {
+    throw e instanceof Error ? e : new Error(String(e))
+  }
+}

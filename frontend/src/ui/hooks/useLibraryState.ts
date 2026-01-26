@@ -43,7 +43,7 @@ export function useLibraryState(analysisInProgressRef: React.MutableRefObject<bo
                 const next = await loadLibrary()
                 // 刷新时保留前端正在处理的状态（processing/reanalyzing），防止后端旧数据覆盖
                 setLibrary((prev) => {
-                    // 如果分析不在进行中，需要清理后端返回的残留 processing 状态（脏数据）
+                    // 如果分析不在进行中，需要清理后端返回的残留状态（脏数据）
                     if (!analysisInProgressRef.current) {
                         return {
                             ...next,

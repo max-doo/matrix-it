@@ -72,16 +72,19 @@ export function useColumnConfig(
                     }
                     : zoteroUi
 
+            const prevMatrixMeta = ((matrixUi.meta as Record<string, unknown>) ?? {}) as Record<string, unknown>
+            const prevMatrixAnalysis = ((matrixUi.analysis as Record<string, unknown>) ?? {}) as Record<string, unknown>
+
             const nextMatrix = {
                 ...matrixUi,
                 ...(next.metaVisible && activeView === 'matrix'
                     ? {
-                        meta: { visible: next.metaVisible },
+                        meta: { ...prevMatrixMeta, visible: next.metaVisible },
                     }
                     : {}),
                 ...(next.analysisVisible
                     ? {
-                        analysis: { visible: next.analysisVisible },
+                        analysis: { ...prevMatrixAnalysis, visible: next.analysisVisible },
                     }
                     : {}),
             }

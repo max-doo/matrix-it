@@ -129,12 +129,109 @@
   },
   "llm": {
     "api_key": "",
-    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "max_input_chars": 12000,
-    "max_pdf_bytes": 100000,
-    "model": "qwen-flash",
+    "base_url": "http://127.0.0.1:8045/v1",
+    "max_input_chars": 100000,
+    "max_pdf_bytes": 20971520,
+    "model": [
+      "gemini-3-flash"
+    ],
     "multimodal": false,
-    "temperature": 0.7
+    "profiles": {
+      "custom": {
+        "api_key": "",
+        "base_url": "http://127.0.0.1:8045/v1",
+        "max_input_chars": 100000,
+        "max_pdf_bytes": 20971520,
+        "model": [],
+        "multimodal": false,
+        "temperature": 0.5
+      },
+      "dashscope": {
+        "api_key": "",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "max_input_chars": 100000,
+        "max_pdf_bytes": 20971520,
+        "model": [
+          "qwen-flash"
+        ],
+        "multimodal": false,
+        "temperature": 0.5
+      },
+      "deepseek": {
+        "api_key": "",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "max_input_chars": 100000,
+        "max_pdf_bytes": 20971520,
+        "model": [],
+        "multimodal": false,
+        "temperature": 0.5
+      },
+      "doubao": {
+        "api_key": "",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "max_input_chars": 100000,
+        "max_pdf_bytes": 20971520,
+        "model": [],
+        "multimodal": false,
+        "temperature": 0.5
+      },
+      "gemini": {
+        "api_key": "",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "max_input_chars": 100000,
+        "max_pdf_bytes": 20971520,
+        "model": [],
+        "multimodal": false,
+        "temperature": 0.5
+      },
+      "moonshot": {
+        "api_key": "",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "max_input_chars": 100000,
+        "max_pdf_bytes": 20971520,
+        "model": [],
+        "multimodal": false,
+        "temperature": 0.5
+      },
+      "openai": {
+        "api_key": "",
+        "base_url": "https://api.openai.com/v1",
+        "max_input_chars": 100000,
+        "max_pdf_bytes": 20971520,
+        "model": [],
+        "multimodal": false,
+        "temperature": 0.5
+      },
+      "openrouter": {
+        "api_key": "",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "max_input_chars": 100000,
+        "max_pdf_bytes": 20971520,
+        "model": [],
+        "multimodal": false,
+        "temperature": 0.5
+      },
+      "siliconflow": {
+        "api_key": "",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "max_input_chars": 100000,
+        "max_pdf_bytes": 20971520,
+        "model": [],
+        "multimodal": false,
+        "temperature": 0.5
+      },
+      "zhipu": {
+        "api_key": "",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "max_input_chars": 100000,
+        "max_pdf_bytes": 20971520,
+        "model": [],
+        "multimodal": false,
+        "temperature": 0.5
+      }
+    },
+    "provider": "custom",
+    "temperature": 0.5
   },
   "ui": {
     "debug_llm": true,
@@ -142,17 +239,17 @@
       "matrix": {
         "analysis": {
           "order": [
+            "tldr",
+            "key_word",
             "bib_type",
+            "research_question",
+            "methods",
+            "logic",
+            "key_findings",
             "contribution",
             "highlights",
             "inspiration",
-            "key_findings",
-            "key_word",
-            "limitations",
-            "logic",
-            "methods",
-            "research_question",
-            "tldr"
+            "limitations"
           ],
           "visible": [
             "key_word",
