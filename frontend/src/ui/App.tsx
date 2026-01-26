@@ -1,13 +1,9 @@
-/**
- * 模块名称: 主应用组件
- * 功能描述: 整个 React 应用的根组件，负责布局结构（Layout）、路由/视图切换、状态管理（文献库、配置、筛选）
- *           以及核心业务逻辑的协调（如加载文献库、调用分析、同步设置、定时刷新等）。
- */
-import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ConfigProvider,
   Layout,
   Button,
+  Alert,
   Popover,
   Input,
   Space,
@@ -15,183 +11,52 @@ import {
   Segmented,
   Modal,
   message,
-  Form,
-  Menu,
 } from 'antd'
 import {
   PlayCircleOutlined,
-  HomeOutlined,
   SearchOutlined,
   DeleteOutlined,
   StopOutlined,
+  ExclamationCircleOutlined,
 } from '@ant-design/icons'
-import { homeDir } from '@tauri-apps/api/path'
-
 import zhCN from 'antd/locale/zh_CN'
 
-import type { AnalysisFieldRow, CollectionNode, FilterMode, LiteratureItem } from '../types'
+import type { LiteratureItem } from '../types'
 import {
   updateItem as updateItemRpc,
-  readConfig,
-  saveConfig,
 } from '../lib/backend'
-import { AppSidebar, ZoteroStatusFooter } from './components/AppSidebar'
-import { LiteratureTable, type LiteratureTableColumnOption, type LiteratureTableView } from './components/LiteratureTable'
+import { AppSidebar } from './components/AppSidebar'
+import { LiteratureTable, type LiteratureTableView } from './components/LiteratureTable'
 import { TitleBar } from './components/TitleBar'
-import { SettingsPage, type SettingsScrollApi, type SettingsSectionKey } from './components/SettingsPage'
+import { SettingsPage } from './components/SettingsPage'
+import { SettingsSidebar } from './components/SettingsSidebar'
 import { ColumnSettingsPopover } from './components/ColumnSettingsPopover'
 import { LiteratureFilterPopover } from './components/LiteratureFilterPopover'
 import { LiteratureDetailDrawer, type LiteratureDetailDrawerMode } from './components/LiteratureDetailDrawer'
-import { ConfirmModal } from './components/ConfirmModal'
-
-// --- Filter Hooks: 筛选状态管理 ---
-import { useFilterState, useCollectionItems, useFilteredItems, useFilterOptions } from './hooks/useFilterState'
-
-// --- Citation Hooks: 引用生成与管理 ---
-import { useCitationManager } from './hooks/useCitationManager'
-
-// --- Column Hooks: 表格列配置管理 ---
-import { useColumnConfig } from './hooks/useColumnConfig'
-
-// --- Analysis Hooks: AI 分析流程状态 ---
-import { useAnalysisState } from './hooks/useAnalysisState'
-
-// --- Library Hooks: 文献库核心数据 ---
-import { useLibraryState, useZoteroWatch } from './hooks/useLibraryState'
-
-// --- Theme Hooks: 主题样式 ---
-import { useAppTheme } from './hooks/useAppTheme'
-
-// --- Config Hooks: 应用配置与表单 ---
 import { useAppConfig } from './hooks/useAppConfig'
-
-// --- Navigation Hooks: 详情页导航 ---
-import { useDetailNavigation } from './hooks/useDetailNavigation'
+import { useAppTheme } from './hooks/useAppTheme'
+import { useAnalysisState } from './hooks/useAnalysisState'
+import { useCitationManager } from './hooks/useCitationManager'
+import { useColumnConfig } from './hooks/useColumnConfig'
+import { useFilterState } from './hooks/useFilterState'
+import { useLibraryState, useZoteroWatch } from './hooks/useLibraryState'
+import { STORAGE_KEYS, deleteKey, readString, writeString } from './lib/storage'
+import { collectCollectionKeys } from './lib/collectionUtils'
 
 const { Sider, Content } = Layout
 
-const LIBRARY_CACHE_KEY = 'matrixit.library.cache.v1'
-const ACTIVE_COLLECTION_KEY = 'matrixit.ui.activeCollectionKey'
-const ACTIVE_VIEW_KEY = 'matrixit.ui.activeView'
-
-const isTauriRuntime = () => {
-  const w = window as unknown as Record<string, unknown>
-  return !!(w && (w.__TAURI_INTERNALS__ || w.__TAURI__))
-}
-
-type LibraryCachePayload = {
-  savedAt: number
-  collections: CollectionNode[]
-  items: LiteratureItem[]
-}
-
-const readLibraryCache = (): LibraryCachePayload | null => {
-  try {
-    const raw = localStorage.getItem(LIBRARY_CACHE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<LibraryCachePayload>
-    if (!parsed || !Array.isArray(parsed.collections) || !Array.isArray(parsed.items)) return null
-    return {
-      savedAt: typeof parsed.savedAt === 'number' ? parsed.savedAt : 0,
-      collections: parsed.collections as CollectionNode[],
-      items: parsed.items as LiteratureItem[],
-    }
-  } catch {
-    return null
-  }
-}
-
-const writeLibraryCache = (payload: LibraryCachePayload) => {
-  try {
-    localStorage.setItem(LIBRARY_CACHE_KEY, JSON.stringify(payload))
-  } catch {
-    return
-  }
-}
-
-const readString = (key: string): string | null => {
-  try {
-    const v = localStorage.getItem(key)
-    return v && v.trim().length > 0 ? v : null
-  } catch {
-    return null
-  }
-}
-
-const writeString = (key: string, value: string) => {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    return
-  }
-}
-
-const deleteKey = (key: string) => {
-  try {
-    localStorage.removeItem(key)
-  } catch {
-    return
-  }
-}
-
-const collectCollectionKeys = (nodes: CollectionNode[]): Set<string> => {
-  const out = new Set<string>()
-  const stack = [...nodes]
-  while (stack.length) {
-    const n = stack.pop()
-    if (!n) continue
-    out.add(n.key)
-    if (Array.isArray(n.children) && n.children.length) stack.push(...n.children)
-  }
-  return out
-}
-
-
-
-
-
+/**
+ * 应用主组件：负责组装工作台/设置页布局，并将筛选、主题等状态委托给独立 hooks 管理。
+ */
 export default function App() {
-  // --- Refs ---
-  // 用于在不触发重渲染的情况下在不同 Hooks 间共享分析状态
   const analysisInProgressRef = useRef(false)
-
-  // --- Core State: 文献库 ---
-  // 管理核心的文献列表、集合结构以及加载/刷新逻辑
-  const {
-    library,
-    setLibrary,
-    refreshingLibrary,
-    refreshError,
-    lastRefreshAt,
-    handleRefresh, // 触发刷新的主函数
-    refreshLibrary // 暴露给副作用使用的刷新函数
-  } = useLibraryState(analysisInProgressRef)
-
-  // --- UI State: 视图与选择 ---
-  // 控制当前视图（Zotero列表 vs 矩阵视图）以及各视图下的选中项
-  const [activeView, setActiveView] = useState(() => readString(ACTIVE_VIEW_KEY) ?? 'zotero')
-  const [zoteroSelectedRowKeys, setZoteroSelectedRowKeys] = useState<React.Key[]>([])
-  const [matrixSelectedRowKeys, setMatrixSelectedRowKeys] = useState<React.Key[]>([])
-
-  // 计算当前视图下的选中项
-  const selectedRowKeys = useMemo(() => {
-    return activeView === 'matrix' ? matrixSelectedRowKeys : zoteroSelectedRowKeys
-  }, [activeView, matrixSelectedRowKeys, zoteroSelectedRowKeys])
-
-  // 更新选中项的包装函数
-  const setSelectedRowKeys = useCallback((keys: React.Key[]) => {
-    if (activeView === 'matrix') {
-      setMatrixSelectedRowKeys(keys)
-    } else {
-      setZoteroSelectedRowKeys(keys)
-    }
-  }, [activeView])
-
-  const [activeCollectionKey, setActiveCollectionKey] = useState<string | null>(() => readString(ACTIVE_COLLECTION_KEY))
-  const [columnsPopoverOpen, setColumnsPopoverOpen] = useState(false)
-
-  // --- Filter State: 筛选与搜索 ---
-  // 管理侧边栏筛选、顶部搜索框以及高级筛选面板的状态
+  const { library, setLibrary, refreshingLibrary, refreshError, setRefreshError, lastRefreshAt, refreshLibrary, handleRefresh } =
+    useLibraryState(analysisInProgressRef)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [activeCollectionKey, setActiveCollectionKey] = useState<string | null>(() => readString(STORAGE_KEYS.ACTIVE_COLLECTION))
+  const [activeItemKey, setActiveItemKey] = useState<string | null>(null)
+  const [detailLeaveGuard, setDetailLeaveGuard] = useState<null | (() => Promise<boolean>)>(null)
+  const [activeView, setActiveView] = useState(() => readString(STORAGE_KEYS.ACTIVE_VIEW) ?? 'zotero')
   const {
     filterMode,
     setFilterMode,
@@ -207,11 +72,9 @@ export default function App() {
     setSearchPopoverOpen,
     searchInputElRef,
   } = useFilterState(activeView)
-
+  const { themeToken, activeSearchButtonStyle } = useAppTheme(normalizedSearchQuery)
+  const [columnsPopoverOpen, setColumnsPopoverOpen] = useState(false)
   const [mode, setMode] = useState<'workbench' | 'settings'>('workbench')
-
-  // --- Config State: 配置管理 ---
-  // 负责应用配置的读取、保存、表单绑定以及设置页面的各个部分
   const {
     rawConfig,
     setRawConfig,
@@ -226,151 +89,84 @@ export default function App() {
     scheduleAutoSaveSettings,
     loadSettings,
     metaFieldDefs,
-    analysisFieldDefs
+    analysisFieldDefs,
   } = useAppConfig(mode)
-
-  // --- Theme State: 主题 ---
-  // 根据搜索状态动态调整主题样式（如搜索激活时的高亮）
-  const { themeToken, activeSearchButtonStyle } = useAppTheme(normalizedSearchQuery)
-
+  useZoteroWatch(zoteroStatus, refreshLibrary)
   const [currentPageRows, setCurrentPageRows] = useState<LiteratureItem[]>([])
-  const [detailMode, setDetailMode] = useState<LiteratureDetailDrawerMode>(() => (readString(ACTIVE_VIEW_KEY) ?? 'zotero') === 'matrix' ? 'matrix' : 'zotero')
-
-  // --- Citation State: 引用生成 ---
-  // 管理文献引用的异步生成、缓存及状态更新
-  const {
-    citationsTick,
-    detailCitationState,
-    setDetailCitationState,
-    citationCacheRef,
-    citationsInFlightRef,
-    ensureCitations,
-  } = useCitationManager(library, setLibrary)
-
-  // --- Computed Data: 筛选与排序结果 ---
-
-  // 1. 根据当前选中的集合（Collection）获取基础文献列表
-  const collectionItems = useCollectionItems(library, activeCollectionKey)
-
-  // 2. 根据当前列表内容生成可用的筛选项（如存在的年份、标签等）
-  const {
-    filterYearOptions,
-    filterTypeOptions,
-    filterTagOptions,
-    filterKeywordOptions,
-    filterBibTypeOptions
-  } = useFilterOptions(collectionItems)
-
-  // 3. 应用所有筛选条件（状态、字段、搜索关键词）得到最终展示列表
-  const filteredItems = useFilteredItems(
-    collectionItems,
-    filterMode,
-    fieldFilter,
-    normalizedSearchQuery
-  )
-
-  // 4. 维护排序后的列表，用于详情页的前后条目导航
-  const [sortedItems, setSortedItems] = useState<LiteratureItem[]>([])
-  const navigationItems = sortedItems.length > 0 ? sortedItems : filteredItems
-
-  // --- Detail Navigation: 详情页控制 ---
-  // 处理详情抽屉的打开/关闭以及条目切换逻辑
-  const {
-    activeItemKey,
-    setActiveItemKey,
-    activeItem,
-    canPrevDetail,
-    canNextDetail,
-    goPrevDetail,
-    goNextDetail
-  } = useDetailNavigation(library, navigationItems)
-
-  // --- Columns Config: 列显示配置 ---
-  // 计算表格需要显示的列（元数据列 + 分析字段列）
+  const [tableSortedKeys, setTableSortedKeys] = useState<string[]>([])
+  const [detailMode, setDetailMode] = useState<LiteratureDetailDrawerMode>(() => (readString(STORAGE_KEYS.ACTIVE_VIEW) ?? 'zotero') === 'matrix' ? 'matrix' : 'zotero')
   const {
     metaColumnPanel,
     analysisColumnPanel,
-    tableMetaColumns,
-    tableAnalysisColumns,
+    matrixAnalysisOrder,
     applyMetaPanelChange,
     applyAnalysisPanelChange,
-    matrixAnalysisOrder,
     getFieldName,
-  } = useColumnConfig(
-    rawConfig,
-    setRawConfig,
-    metaFieldDefs,
-    analysisFieldDefs,
-    activeView
-  )
-
-  const citationColumnVisible = useMemo(() => tableMetaColumns.some((c) => c.key === 'citation'), [tableMetaColumns])
-
-  // --- Watcher: 外部状态监听 ---
-  // 监听 Zotero 数据库变化并自动刷新
-  useZoteroWatch(zoteroStatus, refreshLibrary)
-
-  // --- Analysis Logic: 分析执行 ---
-  // 处理“开始分析”、“停止分析”、“删除分析结果”等核心业务逻辑
+    tableMetaColumns,
+    tableAnalysisColumns,
+    citationColumnVisible,
+  } = useColumnConfig(rawConfig, setRawConfig, metaFieldDefs, analysisFieldDefs, activeView)
+  const { citationsTick, detailCitationState, setDetailCitationState, citationCacheRef, citationsInFlightRef, ensureCitations } =
+    useCitationManager(library, setLibrary)
   const {
     analysisInProgress,
     stoppingAnalysis,
     deletingExtracted,
     confirmModal,
     setConfirmModal,
-    startAnalysis,
+    startAnalysis: startAnalysis,
     handleAnalysisRequest,
-    handleStopAnalysisRequest,
-    handleConfirmStopAnalysis,
     handleConfirmAnalysis,
     handleDeleteRequest,
     handleConfirmDelete,
-  } = useAnalysisState(
-    library,
-    setLibrary,
-    selectedRowKeys,
-    setSelectedRowKeys,
-    handleRefresh,
-    analysisInProgressRef
-  )
+    handleStopAnalysisRequest,
+    handleConfirmStopAnalysis,
+  } = useAnalysisState(library, setLibrary, selectedRowKeys, setSelectedRowKeys, handleRefresh, analysisInProgressRef)
 
   const handleSelectCollection = useCallback((key: string) => {
     setActiveCollectionKey(key)
-    writeString(ACTIVE_COLLECTION_KEY, key)
+    writeString(STORAGE_KEYS.ACTIVE_COLLECTION, key)
   }, [])
 
-  // --- Effects: 副作用管理 ---
+  const requestOpenDetail = useCallback(
+    async (key: string) => {
+      if (key === activeItemKey) return
+      if (detailLeaveGuard) {
+        const ok = await detailLeaveGuard()
+        if (!ok) return
+      }
+      setActiveItemKey(key)
+    },
+    [activeItemKey, detailLeaveGuard]
+  )
 
-  // 1. 持久化当前视图模式（Zotero/Matrix）
   useEffect(() => {
-    writeString(ACTIVE_VIEW_KEY, activeView)
+    writeString(STORAGE_KEYS.ACTIVE_VIEW, activeView)
   }, [activeView])
 
   const lastDetailItemKeyRef = useRef<string | null>(null)
 
-  // 2. 管理详情抽屉的模式（编辑模式/查看模式）
-  // 规则：初次打开时根据主视图跟随（Matrix视图->Matrix模式），之后保持用户选择
   useEffect(() => {
-    const wasOpen = lastDetailItemKeyRef.current !== null
-    const isOpen = activeItemKey !== null
-
-    if (!isOpen) {
+    if (!activeItemKey) {
       lastDetailItemKeyRef.current = null
       return
     }
-
-    if (!wasOpen && isOpen) {
-      setDetailMode(activeView === 'matrix' ? 'matrix' : 'zotero')
-    }
+    const wasClosed = lastDetailItemKeyRef.current === null
     lastDetailItemKeyRef.current = activeItemKey
+    if (!wasClosed) return
+    setDetailMode(activeView === 'matrix' ? 'matrix' : 'zotero')
   }, [activeItemKey, activeView])
 
-  // 3. 校验集合有效性：如果 activeCollectionKey 为空，清理本地存储
   useEffect(() => {
-    if (!activeCollectionKey) deleteKey(ACTIVE_COLLECTION_KEY)
+    if (!activeCollectionKey) deleteKey(STORAGE_KEYS.ACTIVE_COLLECTION)
   }, [activeCollectionKey])
 
-  // 4. 当离开工作台模式时，关闭所有浮层（搜索框、筛选器）
+  useEffect(() => {
+    if (library.collections.length === 0) return
+    const keys = collectCollectionKeys(library.collections)
+    setActiveCollectionKey((prev) => (prev && keys.has(prev) ? prev : null))
+  }, [library.collections])
+
   useEffect(() => {
     if (mode !== 'workbench') {
       setSearchPopoverOpen(false)
@@ -378,7 +174,6 @@ export default function App() {
     }
   }, [mode])
 
-  // 5. 全局快捷键：Ctrl+F 唤起搜索
   useEffect(() => {
     if (mode !== 'workbench') return
 
@@ -395,8 +190,229 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [mode])
 
-  // 6. 详情页引用自动生成
-  // 当打开详情页时，自动检查并生成该条目的引用信息
+  const collectionItems = useMemo(() => {
+    return activeCollectionKey
+      ? library.items.filter((it) =>
+        (it.collections ?? []).some((c) => c.key === activeCollectionKey || c.pathKeyChain?.includes(activeCollectionKey))
+      )
+      : library.items
+  }, [activeCollectionKey, library.items])
+
+  const filterYearOptions = useMemo(() => {
+    const years = new Set<number>()
+    for (const it of collectionItems) {
+      const raw = String((it as unknown as Record<string, unknown>).year ?? '')
+      const y = Number.parseInt(raw.replace(/[^\d]/g, ''), 10)
+      if (Number.isFinite(y) && y > 0) years.add(y)
+    }
+    return Array.from(years)
+      .sort((a, b) => b - a)
+      .map((y) => ({ value: String(y), label: String(y) }))
+  }, [collectionItems])
+
+  const filterTypeOptions = useMemo(() => {
+    const types = new Set<string>()
+    for (const it of collectionItems) {
+      const raw = String(((it as unknown as Record<string, unknown>).type ?? it.bib_type ?? '') as unknown)
+        .trim()
+        .replace(/\s+/g, ' ')
+      if (raw) types.add(raw)
+    }
+    return Array.from(types)
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      .map((t) => ({ value: t, label: t }))
+  }, [collectionItems])
+
+  const filterTagOptions = useMemo(() => {
+    const allTags = new Set<string>()
+    for (const it of collectionItems) {
+      const metaExtra = (it as Record<string, unknown>).meta_extra
+      const tags = metaExtra && typeof metaExtra === 'object' ? (metaExtra as Record<string, unknown>).tags : null
+      if (Array.isArray(tags)) {
+        for (const t of tags) {
+          const s = String(t || '').trim()
+          if (s) allTags.add(s)
+        }
+      }
+    }
+    return Array.from(allTags)
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      .map((t) => ({ value: t, label: t }))
+  }, [collectionItems])
+
+  const filterKeywordOptions = useMemo(() => {
+    const allKeywords = new Set<string>()
+    for (const it of collectionItems) {
+      const val = (it as Record<string, unknown>).key_word
+      if (Array.isArray(val)) {
+        for (const k of val) {
+          const s = String(k || '').trim()
+          if (s) allKeywords.add(s)
+        }
+      } else if (typeof val === 'string' && val.trim().length > 0) {
+        const parts = val.split(/[,，;；\n]/).map((s) => s.trim()).filter(Boolean)
+        for (const p of parts) allKeywords.add(p)
+      }
+    }
+    return Array.from(allKeywords)
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      .map((t) => ({ value: t, label: t }))
+  }, [collectionItems])
+
+  const filterBibTypeOptions = useMemo(() => {
+    const types = new Set<string>()
+    for (const it of collectionItems) {
+      const raw = String(((it as unknown as Record<string, unknown>).bib_type ?? '') as unknown)
+        .trim()
+        .replace(/\s+/g, ' ')
+      if (raw) types.add(raw)
+    }
+    return Array.from(types)
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      .map((t) => ({ value: t, label: t }))
+  }, [collectionItems])
+
+  // 根据集合与状态筛选条目：
+  // - 集合命中规则：集合 key 命中或 pathKeyChain 包含（选中父集合会包含其子集合条目）
+  const filteredItems = useMemo(() => {
+    const byStatus =
+      filterMode === 'all'
+        ? collectionItems
+        : filterMode === 'unprocessed'
+          ? collectionItems.filter((it) => it.processed_status !== 'done' && it.processed_status !== 'reanalyzing')
+          : collectionItems.filter((it) => it.processed_status === 'done' || it.processed_status === 'reanalyzing')
+
+    const q = normalizedSearchQuery
+    const normalizeText = (v: unknown) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+
+    const predicates: Array<(it: LiteratureItem) => boolean> = []
+
+    const yearRaw = fieldFilter.year.trim()
+    if (yearRaw) {
+      const targetYear = Number.parseInt(yearRaw, 10)
+      if (Number.isFinite(targetYear)) {
+        predicates.push((it) => {
+          const raw = String((it as unknown as Record<string, unknown>).year ?? '')
+          const y = Number.parseInt(raw.replace(/[^\d]/g, ''), 10)
+          if (!Number.isFinite(y)) return false
+          if (fieldFilter.yearOp === 'gt') return y > targetYear
+          if (fieldFilter.yearOp === 'lt') return y < targetYear
+          return y === targetYear
+        })
+      }
+    }
+
+    const bibTypeRaw = fieldFilter.bibType.trim()
+    if (bibTypeRaw) {
+      const target = normalizeText(bibTypeRaw)
+      predicates.push((it) => {
+        const v = ((it as unknown as Record<string, unknown>).bib_type ?? '') as unknown
+        return normalizeText(v) === target
+      })
+    }
+
+    const typeRaw = fieldFilter.type.trim()
+    if (typeRaw) {
+      const target = normalizeText(typeRaw)
+      predicates.push((it) => {
+        const v = ((it as unknown as Record<string, unknown>).type ?? it.bib_type ?? '') as unknown
+        return normalizeText(v) === target
+      })
+    }
+
+    const pubRaw = fieldFilter.publications.trim()
+    if (pubRaw) {
+      const target = normalizeText(pubRaw)
+      predicates.push((it) => {
+        const v = ((it as unknown as Record<string, unknown>).publications ?? '') as unknown
+        return normalizeText(v).includes(target)
+      })
+    }
+
+    if (fieldFilter.tags.length > 0) {
+      const targetSet = new Set(fieldFilter.tags)
+      predicates.push((it) => {
+        const metaExtra = (it as Record<string, unknown>).meta_extra
+        const tags = metaExtra && typeof metaExtra === 'object' ? (metaExtra as Record<string, unknown>).tags : null
+        if (!Array.isArray(tags)) return false
+        return tags.some((t) => targetSet.has(String(t || '').trim()))
+      })
+    }
+
+    if (fieldFilter.keywords.length > 0) {
+      const targetSet = new Set(fieldFilter.keywords)
+      predicates.push((it) => {
+        const val = (it as Record<string, unknown>).key_word
+        let currentKeywords: string[] = []
+        if (Array.isArray(val)) {
+          currentKeywords = val.map((x) => String(x || '').trim()).filter(Boolean)
+        } else if (typeof val === 'string' && val.trim().length > 0) {
+          currentKeywords = val.split(/[,，;；\n]/).map((s) => s.trim()).filter(Boolean)
+        }
+        return currentKeywords.some((k) => targetSet.has(k))
+      })
+    }
+
+    const byFieldFilter =
+      predicates.length === 0
+        ? byStatus
+        : byStatus.filter((it) => (fieldFilter.match === 'all' ? predicates.every((p) => p(it)) : predicates.some((p) => p(it))))
+
+    if (!q) return byFieldFilter
+
+    return byFieldFilter.filter((it) => {
+      const title = normalizeText(it.title)
+      const author = normalizeText(it.author)
+      return title.includes(q) || author.includes(q)
+    })
+  }, [activeView, collectionItems, fieldFilter, filterMode, normalizedSearchQuery])
+
+  const activeItem = useMemo(
+    () => (activeItemKey ? library.items.find((it) => it.item_key === activeItemKey) ?? null : null),
+    [activeItemKey, library.items]
+  )
+
+  const filteredItemKeys = useMemo(() => {
+    return filteredItems
+      .map((it) => it.item_key)
+      .filter((k): k is string => typeof k === 'string' && k.trim().length > 0)
+  }, [filteredItems])
+
+  const detailNavKeys = useMemo(() => {
+    if (tableSortedKeys.length === filteredItemKeys.length) {
+      const pool = new Set(filteredItemKeys)
+      if (tableSortedKeys.every((k) => pool.has(k))) return tableSortedKeys
+    }
+    return filteredItemKeys
+  }, [filteredItemKeys, tableSortedKeys])
+
+  const activeItemIndex = useMemo(() => {
+    if (!activeItemKey) return -1
+    return detailNavKeys.indexOf(activeItemKey)
+  }, [activeItemKey, detailNavKeys])
+
+  const canPrevDetail = activeItemIndex > 0
+  const canNextDetail = activeItemIndex >= 0 && activeItemIndex < detailNavKeys.length - 1
+
+  const goPrevDetail = useCallback(() => {
+    if (!canPrevDetail) return
+    const prevKey = detailNavKeys[activeItemIndex - 1]
+    if (prevKey) setActiveItemKey(prevKey)
+  }, [activeItemIndex, canPrevDetail, detailNavKeys])
+
+  const goNextDetail = useCallback(() => {
+    if (!canNextDetail) return
+    const nextKey = detailNavKeys[activeItemIndex + 1]
+    if (nextKey) setActiveItemKey(nextKey)
+  }, [activeItemIndex, canNextDetail, detailNavKeys])
+
+  const handleTableSortedDataChange = useCallback((rows: LiteratureItem[]) => {
+    const keys = rows
+      .map((it) => it.item_key)
+      .filter((k): k is string => typeof k === 'string' && k.trim().length > 0)
+    setTableSortedKeys(keys)
+  }, [])
+
   useEffect(() => {
     if (!activeItemKey) {
       setDetailCitationState({ loading: false, error: null })
@@ -425,14 +441,37 @@ export default function App() {
     }
   }, [activeItemKey, citationsTick, ensureCitations, library.items])
 
-  // 7. 列表中引用自动生成
-  // 当引用列可见时，批量生成当前页所有条目的引用
   useEffect(() => {
     if (!citationColumnVisible) return
     const keys = currentPageRows.map((it) => it.item_key).filter(Boolean)
     if (keys.length === 0) return
     void ensureCitations(keys)
   }, [citationColumnVisible, currentPageRows, ensureCitations])
+  const closeConfirmModal = useCallback(() => {
+    setConfirmModal((prev) => ({ ...prev, open: false }))
+  }, [setConfirmModal])
+
+  const selectedItemStats = useMemo(() => {
+    const selected = new Set(selectedRowKeys.map((k) => String(k)))
+    let total = 0
+    let done = 0
+    for (const it of library.items) {
+      if (!selected.has(it.item_key)) continue
+      total += 1
+      if (it.processed_status === 'done') done += 1
+    }
+    return { total, done, unprocessed: Math.max(0, total - done) }
+  }, [library.items, selectedRowKeys])
+
+  const handleConfirmMixedAnalyzeUnprocessed = useCallback(() => {
+    const selected = new Set(selectedRowKeys.map((k) => String(k)))
+    const keys = library.items
+      .filter((it) => selected.has(it.item_key) && it.processed_status !== 'done')
+      .map((it) => it.item_key)
+    closeConfirmModal()
+    if (keys.length === 0) return
+    void startAnalysis(keys)
+  }, [closeConfirmModal, library.items, selectedRowKeys, startAnalysis])
 
   const segmentedOptions: { label: string; value: string }[] = [
     { label: 'Zotero库', value: 'zotero' },
@@ -466,10 +505,8 @@ export default function App() {
     >
       <AntApp>
         <div className="flex h-screen w-screen overflow-hidden bg-[var(--app-bg)]">
-          {/* 自定义标题栏 */}
           <TitleBar />
           <Layout className="w-full h-full bg-transparent">
-            {/* 左侧侧边栏：根据模式显示 文献库目录 或 设置菜单 */}
             <Sider width={280} theme="light" className="border-r border-slate-200 !bg-[var(--app-bg)]">
               {mode === 'workbench' ? (
                 <AppSidebar
@@ -500,18 +537,12 @@ export default function App() {
                 />
               )}
             </Sider>
-            {/* 主要内容区域 */}
             <Content className="flex flex-col overflow-hidden min-h-0 relative p-4 pt-10 gap-4">
-              {/* 顶部拖拽区域：避开右上角窗口控制按钮 (约140px宽)，防止点击穿透 */}
-              <div data-tauri-drag-region className="absolute top-0 left-0 right-36 h-10" />
+              <div data-tauri-drag-region className="absolute top-0 left-0 right-0 h-10" />
               {mode === 'workbench' ? (
                 <div className="flex-1 min-h-0 bg-white rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 overflow-hidden flex flex-col relative">
-                  {/* 工具栏：整体禁用拖拽，用户可通过顶部专用区域拖动窗口 */}
-                  <div
-                    data-tauri-drag-region="false"
-                    className="flex justify-between items-center shrink-0 px-4 py-3 border-b border-slate-100"
-                  >
-                    <div>
+                  <div data-tauri-drag-region className="flex justify-between items-center shrink-0 px-4 py-3 border-b border-slate-100">
+                    <div data-tauri-drag-region="false">
                       <Segmented
                         value={activeView}
                         onChange={(value) => {
@@ -529,7 +560,7 @@ export default function App() {
                       />
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div data-tauri-drag-region="false" className="flex items-center gap-3">
                       <span className="text-xs secondary-color">已选 {selectedRowKeys.length} 条</span>
 
                       <Space size={8}>
@@ -577,8 +608,6 @@ export default function App() {
                         <LiteratureFilterPopover
                           open={filterPopoverOpen}
                           onOpenChange={setFilterPopoverOpen}
-                          disabled={false}
-                          hideStatus={activeView === 'matrix'}
                           themePrimaryColor={themeToken.colorPrimary}
                           value={{
                             statusMode: filterMode,
@@ -592,7 +621,6 @@ export default function App() {
                             bibType: fieldFilter.bibType,
                           }}
                           onChange={(next) => {
-                            // 使用单次状态更新减少重渲染
                             setFilterMode(next.statusMode)
                             setFieldFilter({
                               match: next.match,
@@ -600,9 +628,9 @@ export default function App() {
                               year: next.year,
                               type: next.type,
                               publications: next.publications,
-                              tags: next.tags || [],
-                              keywords: next.keywords || [],
-                              bibType: next.bibType || '',
+                              tags: next.tags ?? [],
+                              keywords: next.keywords ?? [],
+                              bibType: next.bibType ?? '',
                             })
                           }}
                           yearOptions={filterYearOptions}
@@ -610,6 +638,7 @@ export default function App() {
                           tagOptions={filterTagOptions}
                           keywordOptions={filterKeywordOptions}
                           bibTypeOptions={filterBibTypeOptions}
+                          hideStatus={activeView === 'matrix'}
                         />
                         <ColumnSettingsPopover
                           open={columnsPopoverOpen}
@@ -623,45 +652,23 @@ export default function App() {
                           applyMetaPanelChange={applyMetaPanelChange}
                           applyAnalysisPanelChange={applyAnalysisPanelChange}
                         />
-                        {analysisInProgress ? (
-                          <Button
-                            key="stop_analyze"
-                            danger
-                            icon={<StopOutlined />}
-                            onClick={handleStopAnalysisRequest}
-                            loading={stoppingAnalysis}
-                          >
-                            {stoppingAnalysis ? '终止中' : '终止分析'}
-                          </Button>
-                        ) : (
-                          <Button
-                            key="analyze"
-                            type="primary"
-                            icon={<PlayCircleOutlined />}
-                            onClick={handleAnalysisRequest}
-                            disabled={selectedRowKeys.length === 0}
-                          >
-                            {library.items.some((it) => selectedRowKeys.includes(it.item_key) && it.processed_status === 'done')
-                              ? '重新分析'
-                              : '开始分析'}
-                          </Button>
-                        )}
+                        <Button
+                          key="analyze"
+                          type={analysisInProgress ? 'default' : 'primary'}
+                          danger={analysisInProgress}
+                          icon={analysisInProgress ? <StopOutlined /> : <PlayCircleOutlined />}
+                          onClick={analysisInProgress ? handleStopAnalysisRequest : handleAnalysisRequest}
+                          disabled={analysisInProgress ? stoppingAnalysis : selectedRowKeys.length === 0}
+                        >
+                          {analysisInProgress ? '终止分析' : '开始分析'}
+                        </Button>
                         {activeView === 'matrix' ? (
                           <Button
                             key="delete_extracted"
                             danger
                             icon={<DeleteOutlined />}
                             onClick={handleDeleteRequest}
-                            disabled={
-                              selectedRowKeys.length === 0 ||
-                              deletingExtracted ||
-                              library.items.some((it) => selectedRowKeys.includes(it.item_key) && it.processed_status === 'reanalyzing')
-                            }
-                            title={
-                              library.items.some((it) => selectedRowKeys.includes(it.item_key) && it.processed_status === 'reanalyzing')
-                                ? '重新分析中的条目无法删除'
-                                : undefined
-                            }
+                            disabled={selectedRowKeys.length === 0 || deletingExtracted}
                           >
                           </Button>
                         ) : null}
@@ -677,11 +684,11 @@ export default function App() {
                       analysisColumns={tableAnalysisColumns}
                       selectedRowKeys={selectedRowKeys}
                       onSelectedRowKeysChange={setSelectedRowKeys}
-                      onOpenDetail={(key) => setActiveItemKey(key)}
+                      onOpenDetail={(key) => void requestOpenDetail(key)}
                       onRefresh={handleRefresh}
                       onPageRowsChange={setCurrentPageRows}
+                      onSortedDataChange={handleTableSortedDataChange}
                       activeItemKey={activeItemKey}
-                      onSortedDataChange={setSortedItems}
                     />
                   </div>
                 </div>
@@ -702,190 +709,120 @@ export default function App() {
             </Content>
           </Layout>
 
-          {/* 详情页抽屉：显示文献详情、编辑分析结果 */}
           {mode === 'workbench' ? (
-            <LiteratureDetailDrawer
-              item={activeItem}
-              mode={detailMode}
-              analysisFieldDefs={analysisFieldDefs}
-              analysisOrder={matrixAnalysisOrder}
-              onSwitchMode={setDetailMode}
-              citationState={activeItemKey ? detailCitationState : undefined}
-              onClose={() => setActiveItemKey(null)}
-              onPrev={goPrevDetail}
-              onNext={goNextDetail}
-              canPrev={canPrevDetail}
-              canNext={canNextDetail}
-              onSave={
-                detailMode === 'matrix'
-                  ? async (key, patch) => {
-                    try {
-                      await updateItemRpc(key, patch)
-                      setLibrary((prev) => ({
-                        ...prev,
-                        items: prev.items.map((it) => (it.item_key === key ? { ...it, ...patch } : it)),
-                      }))
-                    } catch (e) {
-                      const msg = e instanceof Error ? e.message : '保存失败'
-                      message.error(msg)
-                      throw e instanceof Error ? e : new Error(msg)
-                    }
-                  }
-                  : undefined
-              }
-            />
-          ) : null}
+            <>
+              <Modal
+                open={confirmModal.open}
+                onCancel={closeConfirmModal}
+                title={
+                  confirmModal.type === 'delete'
+                    ? '删除已提取数据'
+                    : confirmModal.type === 'analyze'
+                      ? '重新分析确认'
+                      : confirmModal.type === 'mixed_analyze'
+                        ? '分析确认'
+                        : confirmModal.type === 'stop'
+                          ? (
+                            <span className="text-red-600">
+                              <ExclamationCircleOutlined className="mr-2" />
+                              终止分析确认
+                            </span>
+                          )
+                          : '确认'
+                }
+                footer={
+                  confirmModal.type === 'mixed_analyze'
+                    ? [
+                      <Button key="cancel" onClick={closeConfirmModal}>
+                        取消
+                      </Button>,
+                      <Button key="reanalyze_all" onClick={handleConfirmAnalysis}>
+                        分析全部
+                      </Button>,
+                      <Button
+                        key="only_unprocessed"
+                        type="primary"
+                        onClick={handleConfirmMixedAnalyzeUnprocessed}
+                        disabled={selectedItemStats.unprocessed <= 0}
+                      >
+                        仅分析未完成（{selectedItemStats.unprocessed}）
+                      </Button>,
+                    ]
+                    : [
+                      <Button key="cancel" onClick={closeConfirmModal}>
+                        取消
+                      </Button>,
+                      <Button
+                        key="ok"
+                        type="primary"
+                        danger={confirmModal.type === 'delete' || confirmModal.type === 'stop'}
+                        loading={confirmModal.type === 'stop' ? stoppingAnalysis : undefined}
+                        onClick={
+                          confirmModal.type === 'delete'
+                            ? handleConfirmDelete
+                            : confirmModal.type === 'stop'
+                              ? handleConfirmStopAnalysis
+                              : handleConfirmAnalysis
+                        }
+                      >
+                        {confirmModal.type === 'delete' ? '删除' : confirmModal.type === 'stop' ? '终止' : '确定'}
+                      </Button>,
+                    ]
+                }
+              >
+                {confirmModal.type === 'delete' ? (
+                  <div>将清除 {selectedItemStats.total} 条文献的分析字段（不删除标题/作者/年份等元数据），并尝试删除飞书表格中的对应条目。</div>
+                ) : confirmModal.type === 'analyze' ? (
+                  <div>将重新分析已完成的 {selectedItemStats.total} 条文献，是否继续？</div>
+                ) : confirmModal.type === 'mixed_analyze' ? (
+                  <div>
+                    已选 {selectedItemStats.total} 条文献，其中已完成分析 {selectedItemStats.done} 条。
+                  </div>
+                ) : confirmModal.type === 'stop' ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="将尝试终止当前分析任务"
+                    description="终止后会取消待分析任务，并恢复文献状态，是否继续？"
+                  />
+                ) : null}
+              </Modal>
 
-          {/* 确认模态框：处理高风险操作的二次确认 */}
-          <ConfirmModal
-            open={confirmModal.open}
-            onCancel={() => setConfirmModal((prev) => ({ ...prev, open: false }))}
-            onConfirm={
-              confirmModal.type === 'delete'
-                ? handleConfirmDelete
-                : confirmModal.type === 'stop'
-                  ? handleConfirmStopAnalysis
-                  : handleConfirmAnalysis
-            }
-            title={
-              confirmModal.type === 'delete'
-                ? '确认删除分析与矩阵数据'
-                : confirmModal.type === 'stop'
-                  ? '确认终止分析'
-                  : confirmModal.type === 'mixed_analyze'
-                    ? '确认分析策略'
-                    : '确认重新分析'
-            }
-            type={confirmModal.type === 'delete' || confirmModal.type === 'stop' ? 'danger' : 'primary'}
-            content={
-              confirmModal.type === 'mixed_analyze' ? (
-                <div className="flex flex-col gap-2">
-                  <p className="text-base">
-                    选中 <span className="font-bold">{selectedRowKeys.length}</span> 条文献，其中 <span className="font-bold text-orange-500">{library.items.filter(it => selectedRowKeys.includes(it.item_key) && it.processed_status === 'done').length}</span> 条已完成。
-                  </p>
-                  <p className="text-sm text-slate-500">
-                    请选择您希望执行的分析策略。
-                  </p>
-                </div>
-              ) : confirmModal.type === 'delete' ? (
-                <div className="flex flex-col gap-2">
-                  <p className="text-base">
-                    确定要清除选中的 <span className="font-bold text-red-600">{selectedRowKeys.length}</span> 条文献的分析结果吗？
-                  </p>
-                  <ul className="list-disc pl-5 text-slate-500 text-sm space-y-1">
-                    <li>文献的分析字段将被清空</li>
-                    <li>条目将从“文献矩阵”视图中移除（回到“未处理”状态）</li>
-                    <li>Zotero 中的原始条目不会被删除</li>
-                    <li>如果已同步到飞书，飞书对应记录将尝试被删除</li>
-                  </ul>
-                </div>
-              ) : confirmModal.type === 'stop' ? (
-                <div className="flex flex-col gap-2">
-                  <p className="text-base">
-                    确定要终止当前的分析任务吗？
-                  </p>
-                  <ul className="list-disc pl-5 text-slate-500 text-sm space-y-1">
-                    <li>已完成的分析结果会保留</li>
-                    <li>正在分析和待分析的条目将被取消</li>
-                  </ul>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  <p className="text-base">
-                    确定要重新分析选中的 <span className="font-bold text-[var(--primary-color)]">{selectedRowKeys.length}</span> 条文献吗？
-                  </p>
-                  <ul className="list-disc pl-5 text-slate-500 text-sm space-y-1">
-                    <li>现有的分析结果将被覆盖</li>
-                    <li>分析过程可能需要一些时间</li>
-                  </ul>
-                </div>
-              )
-            }
-            confirmText={
-              confirmModal.type === 'delete'
-                ? '删除'
-                : confirmModal.type === 'stop'
-                  ? '终止'
-                  : '重新分析'
-            }
-            loading={
-              confirmModal.type === 'delete'
-                ? deletingExtracted
-                : confirmModal.type === 'stop'
-                  ? stoppingAnalysis
-                  : false
-            }
-            footer={
-              confirmModal.type === 'mixed_analyze' ? (
-                <div className="flex gap-2">
-                  <Button onClick={() => setConfirmModal((prev) => ({ ...prev, open: false }))}>
-                    取消
-                  </Button>
-                  <Button onClick={() => {
-                    void startAnalysis()
-                    setConfirmModal((prev) => ({ ...prev, open: false }))
-                  }}>
-                    重新分析全部
-                  </Button>
-                  <Button type="primary" onClick={() => {
-                    const items = library.items.filter((it) => selectedRowKeys.includes(it.item_key))
-                    const todo = items.filter((it) => it.processed_status !== 'done').map((it) => it.item_key)
-                    void startAnalysis(todo)
-                    setConfirmModal((prev) => ({ ...prev, open: false }))
-                  }}>
-                    仅分析未处理
-                  </Button>
-                </div>
-              ) : undefined
-            }
-          />
+              <LiteratureDetailDrawer
+                item={activeItem}
+                mode={detailMode}
+                analysisFieldDefs={analysisFieldDefs}
+                analysisOrder={matrixAnalysisOrder}
+                onSwitchMode={setDetailMode}
+                onLeaveGuardChange={(g) => setDetailLeaveGuard(() => g)}
+                citationState={activeItemKey ? detailCitationState : undefined}
+                onClose={() => setActiveItemKey(null)}
+                onPrev={goPrevDetail}
+                onNext={goNextDetail}
+                canPrev={canPrevDetail}
+                canNext={canNextDetail}
+                onSave={
+                  detailMode === 'matrix'
+                    ? async (key, patch) => {
+                      try {
+                        await updateItemRpc(key, patch)
+                        setLibrary((prev) => ({
+                          ...prev,
+                          items: prev.items.map((it) => (it.item_key === key ? { ...it, ...patch } : it)),
+                        }))
+                      } catch (e) {
+                        const msg = e instanceof Error ? e.message : '保存失败'
+                        message.error(msg)
+                        throw e instanceof Error ? e : new Error(msg)
+                      }
+                    }
+                    : undefined
+                }
+              />
+            </>
+          ) : null}
         </div>
       </AntApp>
     </ConfigProvider>
-  )
-}
-
-/**
- * 子模块: 设置侧边栏
- * 功能: 在设置模式下显示的侧边栏，提供不同设置项的导航菜单。
- */
-function SettingsSidebar({
-  activeKey,
-  onSelect,
-  onGoHome,
-  zoteroStatus,
-}: {
-  activeKey: SettingsSectionKey
-  onSelect: (k: SettingsSectionKey) => void
-  onGoHome: () => void
-  zoteroStatus: { path: string; connected: boolean }
-}) {
-  return (
-    <div className="flex flex-col h-full bg-[var(--app-bg)] border-r border-slate-200">
-      <div className="px-4 py-3 flex items-center justify-between">
-        <div className="font-bold text-xl primary-color tracking-tight">设置</div>
-        <div className="flex items-center gap-1">
-          <Button type="text" size="middle" icon={<HomeOutlined />} onClick={onGoHome} aria-label="返回首页" />
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-2 custom-scrollbar">
-        <Menu
-          selectedKeys={[activeKey]}
-          onClick={(e) => onSelect(e.key as SettingsSectionKey)}
-          items={[
-            { key: 'zotero', label: 'Zotero' },
-            { key: 'llm', label: '大模型 API' },
-            { key: 'feishu', label: '飞书多维表格' },
-            { key: 'fields', label: '字段设置' },
-          ]}
-          className="bg-transparent"
-        />
-      </div>
-
-      <div className="p-4">
-        <ZoteroStatusFooter zoteroStatus={zoteroStatus} />
-      </div>
-    </div>
   )
 }

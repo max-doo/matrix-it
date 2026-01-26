@@ -136,13 +136,16 @@
       "gemini-3-flash"
     ],
     "multimodal": false,
+    "parallel_count": 3,
     "profiles": {
       "custom": {
         "api_key": "",
         "base_url": "http://127.0.0.1:8045/v1",
         "max_input_chars": 100000,
         "max_pdf_bytes": 20971520,
-        "model": [],
+        "model": [
+          "gemini-3-flash"
+        ],
         "multimodal": false,
         "temperature": 0.5
       },
@@ -279,10 +282,10 @@
         "meta": {
           "visible": [
             "title",
-            "year",
-            "tags",
             "author",
+            "year",
             "type",
+            "tags",
             "publications"
           ]
         }

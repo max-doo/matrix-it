@@ -8,14 +8,9 @@ import { message } from 'antd'
 import type { AnalysisEvent, LiteratureItem } from '../../types'
 import { startAnalysis as startAnalysisRpc, stopAnalysis as stopAnalysisRpc, deleteExtractedData as deleteExtractedDataRpc } from '../../lib/backend'
 
-type LibraryState = {
-    collections: any[]
-    items: LiteratureItem[]
-}
-
-export function useAnalysisState(
-    library: LibraryState,
-    setLibrary: React.Dispatch<React.SetStateAction<LibraryState>>,
+export function useAnalysisState<T extends { items: LiteratureItem[] }>(
+    library: T,
+    setLibrary: React.Dispatch<React.SetStateAction<T>>,
     selectedRowKeys: React.Key[],
     setSelectedRowKeys: (keys: React.Key[]) => void,
     handleRefresh: () => void,
@@ -149,6 +144,7 @@ export function useAnalysisState(
      * 确认终止分析
      */
     const handleConfirmStopAnalysis = useCallback(async () => {
+        const msgKey = 'analysis'
         setStoppingAnalysis(true)
         try {
             const res = await stopAnalysisRpc()
@@ -167,11 +163,13 @@ export function useAnalysisState(
                 }))
                 setAnalysisInProgress(false)
                 analysisInProgressRef.current = false
-                message.info(`已终止分析，取消了 ${res.cancelled_count} 个待分析任务`)
+                message.info({ content: `已终止分析，取消了 ${res.cancelled_count} 个待分析任务`, key: msgKey })
+            } else {
+                message.info({ content: '当前没有正在进行的分析任务', key: msgKey })
             }
         } catch (e) {
             const msg = e instanceof Error ? e.message : '终止分析失败'
-            message.error(msg)
+            message.error({ content: msg, key: msgKey })
         } finally {
             setStoppingAnalysis(false)
             setConfirmModal((prev) => ({ ...prev, open: false }))

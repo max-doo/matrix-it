@@ -22,16 +22,18 @@ matrix-it/
 │  │  │  ├─ backend.ts            # 前端调用 Tauri command 的封装（invoke）
 │  │  │  └─ mock.ts               # 本地 mock 数据（无后端/调 UI 时使用）
 │  │  └─ ui/
-│  │     ├─ App.tsx               # 主界面：布局、批量操作、详情抽屉
+│  │     ├─ App.tsx               # 主界面：布局组装 + 状态 glue（核心逻辑下沉到 hooks）
 │  │     ├─ styles.css            # Tailwind 基础样式 + 少量全局样式
 │  │     ├─ defaults/
 │  │     │  └─ analysisFields.ts  # 默认解析字段定义
+│  │     ├─ hooks/                # 状态管理 hooks（库刷新/引用/分析/设置/筛选/列配置）
+│  │     ├─ lib/                  # UI 侧轻量工具（storage/theme/collection utils）
 │  │     ├─ utils/
 │  │     │  └─ ui-formatters.tsx  # UI 格式化工具（作者名处理、文献类型映射/着色）
 │  │     └─ components/
 │  │        ├─ AppSidebar.tsx      # 左侧集合树：搜索、展开/收起、选中态
 │  │        ├─ ColumnSettingsPopover.tsx # 字段设置弹层：列显隐/顺序，拖拽排序（带滚动/限高）
-│  │        ├─ ConfirmModal.tsx    # 通用确认弹窗（删除/终止/混合分析策略）
+│  │        ├─ SettingsSidebar.tsx # 设置页侧边栏：分区导航 + 返回
 │  │        ├─ LiteratureDetailDrawer.tsx # 详情抽屉：Zotero 只读 / 矩阵可编辑解析字段
 │  │        ├─ LiteratureTable.tsx # 文献表格：排序、拖拽调列宽、分页与选中态
 │  │        ├─ LiteratureFilterPopover.tsx # 文献筛选弹层：状态/年份/类型/出版物
@@ -112,7 +114,8 @@ matrix-it/
 
 - **中途终止**：前端可随时中断分析。后端使用 `taskkill /F /T /PID` 强制终止 sidecar 进程树（Windows），确保无残留后台进程。中断后，前端状态会自动回滚（新分析 → 未处理，重新分析 → 已完成）。
 - **重新分析 (Reanalyze)**：支持对"已完成"条目发起重新分析。状态会标记为 `reanalyzing`（橙色），与首次分析 (`processing`) 区分。
-- **混合策略**：当同时选中"已完成"和"未处理"条目时，系统会弹出策略选择框，允许用户"仅分析未处理"（只处理新条目）或"全部重新分析"。
+- **开始/终止一体化**：分析启动后，“开始分析”按钮会切换为“终止分析”（危险样式），点击后弹出警示确认弹窗，确认按钮为红色。
+- **混合策略**：当同时选中"已完成"和"未处理"条目时，系统会弹出策略选择框，允许用户"全部重新分析"或"仅分析未处理"（高亮按钮，且放在最右侧）。
 - **状态保护**：刷新动作 (`refreshLibrary`) 能够智能识别当前是否有正在进行的分析，防止后端旧数据覆盖前端的实时进度状态。  
 
 ## 开发服务器启动指南
@@ -140,7 +143,8 @@ matrix-it/
 
 - Zotero：`zotero.data_dir`（需包含 `zotero.sqlite` 与 `storage/`）
 - 飞书：`feishu.app_id` / `feishu.app_secret` / `feishu.bitable_url`
-- LLM（用于 `analyze`）：`llm.base_url` / `llm.model` / `llm.api_key`（OpenAI-Style Chat Completions）
+  - `llm.base_url` / `llm.model` / `llm.api_key`（OpenAI-Style Chat Completions）
+  - 可选：`llm.parallel_count` 设置并行分析数量（建议 3-5，默认为 1 串行）
   - 可选：`llm.multimodal=true` 启用“多模态优先 + 文本回退”（会尝试 OpenAI-Style Responses 的 PDF 上传）
   - 可选：`llm.max_pdf_bytes` 限制上传 PDF 的最大字节数
   - 可选：`llm.max_input_chars` 限制文本回退的最大字符数
@@ -174,6 +178,7 @@ pip install -r backend/requirements.txt
 
 引用格式（GB/T 7714）相关依赖已包含在 `backend/requirements.txt` 中：
 - `citeproc-py`、`citeproc-py-styles`（安装后模块名分别为 `citeproc`、`citeproc_styles`）
+- `aiohttp`（用于并行 LLM 分析）
 
 如需构建 sidecar 可执行文件（PyInstaller）：
 
@@ -321,6 +326,7 @@ python backend/matrixit_backend/pdf.py <pdf_path> all
   - 事件流：stdout 按条输出 `started/finished/failed`（含 `error_code`）
   - PDF 定位策略：优先 `pdf_path`（按项目根目录解析相对路径），否则用 Zotero storage 路径
   - LLM：按 `config/config.local.json` 的 `llm.base_url/model/api_key` 调用（OpenAI-Style）
+  - 并行：若 `config` 中设置 `llm.parallel_count > 1`，则启用并行加速（使用 `aiohttp + asyncio`）
 - 同步到飞书：
   ```bash
   python backend/matrixit_backend/sidecar.py sync_feishu "[\"<item_key>\"]"

@@ -108,6 +108,7 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
         max_input_chars: currentValues.max_input_chars,
         max_pdf_bytes: currentValues.max_pdf_bytes,
         multimodal: currentValues.multimodal,
+        parallel_count: currentValues.parallel_count,
       }
     }
 
@@ -137,6 +138,7 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
         max_input_chars: 100000,
         max_pdf_bytes: 20 * 1024 * 1024,
         multimodal: false,
+        parallel_count: 3,
       }
     }
 
@@ -290,9 +292,16 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
                 name={['llm', 'base_url']}
                 rules={[{ required: true, message: '请输入 base_url' }]}
                 tooltip="模型服务商的 API endpoint，通常不需要修改。"
-                className="md:col-span-3"
+                className="md:col-span-2"
               >
                 <Input placeholder="https://api.openai.com/v1" autoComplete="off" />
+              </Form.Item>
+              <Form.Item
+                label="并行数量"
+                name={['llm', 'parallel_count']}
+                tooltip="同时并行处理的文献数量。建议 3-5，过高可能触发 API 限流。设为 1 则串行处理。"
+              >
+                <InputNumber min={1} max={10} step={1} className="w-full" placeholder="3" />
               </Form.Item>
               <Form.Item
                 label="字符限制"
@@ -553,6 +562,7 @@ export function SettingsPage({
                             max_input_chars: 100000,
                             max_pdf_bytes: 20 * 1024 * 1024,
                             multimodal: false,
+                            parallel_count: 3,
                           },
                         })
                         message.success('已还原默认推荐值')

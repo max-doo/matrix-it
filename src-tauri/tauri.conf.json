@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.matrixit.app",
   "build": {
-    "beforeDevCommand": "",
-    "beforeBuildCommand": "",
+    "beforeDevCommand": { "script": "npm run dev", "cwd": "../frontend" },
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "../frontend" },
     "devUrl": "http://127.0.0.1:5174",
     "frontendDist": "../frontend/dist"
   },

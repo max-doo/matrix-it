@@ -19,9 +19,9 @@ export type LiteratureFilterPopoverValue = {
   year: string
   type: string
   publications: string
-  tags: string[]
-  keywords: string[]
-  bibType: string
+  tags?: string[]
+  keywords?: string[]
+  bibType?: string
 }
 
 export type LiteratureFilterPopoverProps = {
@@ -33,9 +33,9 @@ export type LiteratureFilterPopoverProps = {
   onChange: (next: LiteratureFilterPopoverValue) => void
   yearOptions: { value: string; label: string }[]
   typeOptions: { value: string; label: string }[]
-  tagOptions: { value: string; label: string }[]
-  keywordOptions: { value: string; label: string }[]
-  bibTypeOptions: { value: string; label: string }[]
+  tagOptions?: { value: string; label: string }[]
+  keywordOptions?: { value: string; label: string }[]
+  bibTypeOptions?: { value: string; label: string }[]
   hideStatus?: boolean
 }
 
@@ -57,21 +57,24 @@ export function LiteratureFilterPopover({
   onChange,
   yearOptions,
   typeOptions,
-  tagOptions,
-  keywordOptions,
-  bibTypeOptions,
+  tagOptions = [],
+  keywordOptions = [],
+  bibTypeOptions = [],
   hideStatus,
 }: LiteratureFilterPopoverProps) {
   const hasActiveFilters = useMemo(() => {
     if (disabled) return false
+    const tags = value.tags ?? []
+    const keywords = value.keywords ?? []
+    const bibType = value.bibType ?? ''
     return (
       (value.statusMode !== 'all' && !hideStatus) ||
       value.year.trim().length > 0 ||
       value.type.trim().length > 0 ||
       value.publications.trim().length > 0 ||
-      value.tags.length > 0 ||
-      value.keywords.length > 0 ||
-      value.bibType.trim().length > 0
+      tags.length > 0 ||
+      keywords.length > 0 ||
+      bibType.trim().length > 0
     )
   }, [disabled, value.publications, value.statusMode, value.type, value.year, value.tags, value.keywords, value.bibType, hideStatus])
 
@@ -193,7 +196,7 @@ export function LiteratureFilterPopover({
                 mode="multiple"
                 allowClear
                 maxTagCount="responsive"
-                value={value.tags}
+                value={value.tags ?? []}
                 onChange={(v) => update({ tags: v })}
                 className="w-full"
                 placeholder="请选择"
@@ -233,7 +236,7 @@ export function LiteratureFilterPopover({
                   mode="multiple"
                   allowClear
                   maxTagCount="responsive"
-                  value={value.keywords}
+                value={value.keywords ?? []}
                   onChange={(v) => update({ keywords: v })}
                   className="w-full"
                   placeholder="请选择"

@@ -86,6 +86,7 @@ def load_llm_config(config: dict) -> Optional[dict]:
         "multimodal": multimodal,
         "api": api,
         "max_pdf_bytes": max_pdf_bytes,
+        "parallel_count": int(llm_cfg.get("parallel_count") or 1),
     }
 
 

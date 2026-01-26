@@ -7,7 +7,10 @@ import { message } from 'antd'
 import type { LiteratureItem } from '../../types'
 import { formatCitations } from '../../lib/backend'
 
-export function useCitationManager(library: { items: LiteratureItem[] }, setLibrary: React.Dispatch<React.SetStateAction<{ collections: any[]; items: LiteratureItem[] }>>) {
+export function useCitationManager<T extends { items: LiteratureItem[] }>(
+    library: T,
+    setLibrary: React.Dispatch<React.SetStateAction<T>>
+) {
     const [citationsTick, setCitationsTick] = useState(0)
     const [detailCitationState, setDetailCitationState] = useState<{ loading: boolean; error: string | null }>({
         loading: false,

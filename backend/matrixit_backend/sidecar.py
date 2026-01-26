@@ -110,6 +110,204 @@ def _collection_tree(collections: Dict[int, dict]) -> List[dict]:
     return [{"key": "root", "name": "全部", "children": []}]
 
 
+def _analyze_parallel(
+    keys: List[str],
+    idx: Dict[str, dict],
+    llm_cfg: dict,
+    zotero_dir: str,
+    base_dir: str,
+    system_prompt: str,
+    user_prompt: str,
+    analysis_fields: set,
+    db_path: str,
+    literature_json: str,
+    emit_debug,
+    parallel_count: int,
+) -> None:
+    """
+    并行分析文献条目（内部函数）。
+    
+    处理流程：
+    1. 串行准备阶段：遍历所有 keys，解析 PDF、构建 messages
+    2. 并行调用阶段：使用 AsyncLLMAnalyzer 并行调用 LLM API
+    3. 结果处理阶段：更新数据库、输出进度
+    
+    Args:
+        keys: 需要分析的 item_key 列表
+        idx: 条目索引
+        llm_cfg: LLM 配置
+        ... (其他参数见 analyze 函数)
+    """
+    import asyncio
+    from matrixit_backend import llm_async
+    
+    sys.stderr.write(f"[SIDECAR] 🚀 并行模式启动，并发数: {parallel_count}\n")
+    sys.stderr.flush()
+    
+    # 阶段 1: 串行准备任务数据
+    tasks_data: List[dict] = []
+    items_map: Dict[str, dict] = {}  # item_key -> item
+    original_status_map: Dict[str, str] = {}  # item_key -> 原始状态
+    
+    max_chars = int(llm_cfg.get("max_input_chars", 12000))
+    
+    for k in keys:
+        it = idx.get(str(k))
+        if not it:
+            print(json.dumps({
+                "type": "failed", "item_key": str(k),
+                "error": "ITEM_NOT_FOUND", "error_code": "ITEM_NOT_FOUND"
+            }, ensure_ascii=False), flush=True)
+            continue
+        
+        # 记录原始状态
+        original_status = it.get("processed_status", "unprocessed")
+        restore_status = "done" if original_status == "done" else "unprocessed"
+        original_status_map[str(k)] = restore_status
+        
+        # 标记为处理中
+        it["processed_status"] = "processing"
+        try:
+            storage.upsert_item(db_path, it)
+        except Exception:
+            pass
+        print(json.dumps({"type": "started", "item_key": str(k)}, ensure_ascii=False), flush=True)
+        
+        # 解析 PDF
+        resolved_pdf = zotero.resolve_pdf_path(it, zotero_dir, base_dir=base_dir) or ""
+        if not resolved_pdf:
+            it["processed_status"] = restore_status
+            try:
+                storage.upsert_item(db_path, it)
+            except Exception:
+                pass
+            print(json.dumps({
+                "type": "failed", "item_key": str(k),
+                "error": "PDF_NOT_FOUND", "error_code": "PDF_NOT_FOUND"
+            }, ensure_ascii=False), flush=True)
+            continue
+        
+        text = pdf.extract_pdf_text(resolved_pdf)
+        if not text:
+            it["processed_status"] = restore_status
+            try:
+                storage.upsert_item(db_path, it)
+            except Exception:
+                pass
+            print(json.dumps({
+                "type": "failed", "item_key": str(k),
+                "error": "PDF_TEXT_EMPTY", "error_code": "PDF_TEXT_EMPTY"
+            }, ensure_ascii=False), flush=True)
+            continue
+        
+        it["tldr"] = text.strip().replace("\n", " ")[:300]
+        
+        # 构建消息
+        text_in = text if len(text) <= max_chars else text[:max_chars]
+        user_content = user_prompt + "\n\n---\n\nPDF 正文：\n" + text_in
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        
+        tasks_data.append({
+            "item_key": str(k),
+            "messages": messages,
+        })
+        items_map[str(k)] = it
+    
+    if not tasks_data:
+        sys.stderr.write("[SIDECAR] 没有有效任务需要处理\n")
+        sys.stderr.flush()
+        return
+    
+    sys.stderr.write(f"[SIDECAR] 准备完成，共 {len(tasks_data)} 个任务\n")
+    sys.stderr.flush()
+    
+    # 阶段 2: 并行调用 LLM
+    def on_progress(result: dict) -> None:
+        """进度回调：每完成一个任务时调用"""
+        item_key = result.get("item_key", "")
+        it = items_map.get(item_key)
+        if not it:
+            return
+        
+        restore_status = original_status_map.get(item_key, "unprocessed")
+        
+        if result.get("success"):
+            llm_result = result.get("result", {})
+            if isinstance(llm_result, dict):
+                accepted = {fk: fv for fk, fv in llm_result.items() if fk in analysis_fields}
+                emit_debug(item_key, "result", {
+                    "returned_keys": list(llm_result.keys())[:60],
+                    "accepted_keys": list(accepted.keys())[:60],
+                })
+                if not accepted:
+                    it["processed_status"] = restore_status
+                    it["sync_status"] = "unsynced"
+                    try:
+                        storage.upsert_item(db_path, it)
+                    except Exception:
+                        pass
+                    print(json.dumps({
+                        "type": "failed", "item_key": item_key,
+                        "error": "LLM_EMPTY_RESULT", "error_code": "LLM_EMPTY_RESULT",
+                        "message": f"模型未返回任何可写入字段",
+                    }, ensure_ascii=False), flush=True)
+                    return
+                
+                for fk, fv in accepted.items():
+                    it[fk] = fv
+            
+            it["processed_status"] = "done"
+            it["sync_status"] = "unsynced"
+            try:
+                storage.upsert_item(db_path, it)
+                storage.export_json(db_path, literature_json)
+                sys.stderr.write(f"[SIDECAR] ✓ Item {item_key} saved\n")
+                sys.stderr.flush()
+            except Exception as e:
+                sys.stderr.write(f"[SIDECAR] ❌ Failed to save {item_key}: {e}\n")
+                sys.stderr.flush()
+            print(json.dumps({"type": "finished", "item_key": item_key}, ensure_ascii=False), flush=True)
+        else:
+            # 失败：恢复原始状态
+            it["processed_status"] = restore_status
+            it["sync_status"] = "unsynced"
+            try:
+                storage.upsert_item(db_path, it)
+            except Exception:
+                pass
+            print(json.dumps({
+                "type": "failed", "item_key": item_key,
+                "error": result.get("error_code", "LLM_REQUEST_FAILED"),
+                "error_code": result.get("error_code", "LLM_REQUEST_FAILED"),
+                "message": result.get("error", ""),
+            }, ensure_ascii=False), flush=True)
+    
+    # 执行异步任务
+    analyzer = llm_async.AsyncLLMAnalyzer(
+        parallel_count=parallel_count,
+        timeout=int(llm_cfg.get("timeout_s", 120)),
+    )
+    
+    asyncio.run(analyzer.analyze_batch(
+        tasks_data=tasks_data,
+        llm_cfg=llm_cfg,
+        on_progress=on_progress,
+        debug=lambda d: emit_debug(d.get("item_key", ""), "llm_async", d),
+    ))
+    
+    # 最终导出 JSON
+    try:
+        storage.export_json(db_path, literature_json)
+    except Exception:
+        pass
+    
+    sys.stderr.write(f"[SIDECAR] ✅ 并行分析完成\n")
+    sys.stderr.flush()
+
+
 def load_library(literature_json: str, db_path: str, root_dir: str, config_path: str, fields_path: str) -> dict:
     """
     [IPC 命令] 加载 Zotero 资料库。
@@ -285,6 +483,36 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
     except Exception:
         ordered_keys = []
 
+    # 检查并行配置
+    parallel_count = llm_cfg.get("parallel_count", 1) if llm_cfg else 1
+    
+    # 并行模式：parallel_count > 1 时启用
+    if parallel_count > 1 and llm_cfg:
+        try:
+            _analyze_parallel(
+                keys=keys,
+                idx=idx,
+                llm_cfg=llm_cfg,
+                zotero_dir=zotero_dir,
+                base_dir=base_dir,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                analysis_fields=analysis_fields,
+                db_path=db_path,
+                literature_json=literature_json,
+                emit_debug=emit_debug,
+                parallel_count=parallel_count,
+            )
+            return
+        except ImportError as e:
+            # aiohttp 未安装，回退到串行模式
+            sys.stderr.write(f"[SIDECAR] 并行模式不可用 ({e})，回退到串行模式\n")
+            sys.stderr.flush()
+        except Exception as e:
+            sys.stderr.write(f"[SIDECAR] 并行模式出错 ({e})，回退到串行模式\n")
+            sys.stderr.flush()
+
+    # 串行模式（原有逻辑）
     for k in keys:
         it = idx.get(str(k))
         if not it:

@@ -153,7 +153,7 @@ export async function formatCitations(itemKeys: string[]): Promise<{ citations: 
 /**
  * 启动分析（支持事件流回调）：
  * - 通过 Tauri Channel 将后端分析过程中的事件（AnalysisEvent）推送到前端
- * - 参数名 item_keys/on_event 属于后端契约（与前端变量命名可能不同）
+ * - 参数名默认采用 Tauri 的 camelCase 映射（Rust side 使用 snake_case 变量名）
  *
  * 注意：catch 分支会伪造一段“完整事件流”用于 UI 演示/开发兜底。
  */

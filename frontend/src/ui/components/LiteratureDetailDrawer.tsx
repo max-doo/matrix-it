@@ -19,6 +19,7 @@ export type LiteratureDetailDrawerProps = {
   analysisOrder?: string[]
   onSwitchMode?: (mode: LiteratureDetailDrawerMode) => void
   onClose: () => void
+  onLeaveGuardChange?: (guard: (() => Promise<boolean>) | null) => void
   onSave?: (key: string, patch: Record<string, unknown>) => Promise<void>
   citationState?: { loading: boolean; error?: string | null }
   onPrev?: () => void
@@ -39,6 +40,7 @@ export function LiteratureDetailDrawer({
   analysisOrder,
   onSwitchMode,
   onClose,
+  onLeaveGuardChange,
   onSave,
   citationState,
   onPrev,
@@ -109,7 +111,12 @@ export function LiteratureDetailDrawer({
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    if (!item) return
+    if (!item) {
+      setDraft({})
+      setSnapshot({})
+      setIsEditing(false)
+      return
+    }
     const it = item as Record<string, unknown>
     const next: Record<string, string> = {}
     for (const f of analysisFields) {
@@ -169,6 +176,12 @@ export function LiteratureDetailDrawer({
       })
     })
   }, [isDirty, modal])
+
+  useEffect(() => {
+    if (!onLeaveGuardChange) return
+    onLeaveGuardChange(confirmDiscardIfDirty)
+    return () => onLeaveGuardChange(null)
+  }, [confirmDiscardIfDirty, onLeaveGuardChange])
 
   /**
    * 保存操作
