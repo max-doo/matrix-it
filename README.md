@@ -26,13 +26,14 @@ matrix-it/
 │  │     ├─ styles.css            # Tailwind 基础样式 + 少量全局样式
 │  │     ├─ defaults/
 │  │     │  └─ analysisFields.ts  # 默认解析字段定义
-│  │     ├─ hooks/                # 状态管理 hooks（库刷新/引用/分析/设置/筛选/列配置）
+│  │     ├─ hooks/                # 状态管理 hooks（库刷新/引用/分析/设置/筛选/列配置/详情保存/详情导航）
 │  │     ├─ lib/                  # UI 侧轻量工具（storage/theme/collection utils）
 │  │     ├─ utils/
 │  │     │  └─ ui-formatters.tsx  # UI 格式化工具（作者名处理、文献类型映射/着色）
 │  │     └─ components/
 │  │        ├─ AppSidebar.tsx      # 左侧集合树：搜索、展开/收起、选中态
 │  │        ├─ ColumnSettingsPopover.tsx # 字段设置弹层：列显隐/顺序，拖拽排序（带滚动/限高）
+│  │        ├─ WorkbenchToolbar.tsx # 工作台顶部工具条：搜索/筛选/列设置/分析/删除
 │  │        ├─ SettingsSidebar.tsx # 设置页侧边栏：分区导航 + 返回
 │  │        ├─ LiteratureDetailDrawer.tsx # 详情抽屉：Zotero 只读 / 矩阵可编辑解析字段
 │  │        ├─ LiteratureTable.tsx # 文献表格：排序、拖拽调列宽、分页与选中态
@@ -117,6 +118,17 @@ matrix-it/
 - **开始/终止一体化**：分析启动后，“开始分析”按钮会切换为“终止分析”（危险样式），点击后弹出警示确认弹窗，确认按钮为红色。
 - **混合策略**：当同时选中"已完成"和"未处理"条目时，系统会弹出策略选择框，允许用户"全部重新分析"或"仅分析未处理"（高亮按钮，且放在最右侧）。
 - **状态保护**：刷新动作 (`refreshLibrary`) 能够智能识别当前是否有正在进行的分析，防止后端旧数据覆盖前端的实时进度状态。  
+
+### 6) UI 状态解耦与视图隔离（2026.1 更新）
+
+为降低 `App.tsx` 的复杂度并避免状态串扰，前端进行了进一步解耦：
+
+- **筛选与选项生成下沉**：集合命中、筛选条件 predicates、以及年份/类型/标签/关键词/bibType 选项生成已下沉到 `useFilterState.ts` 中的 hooks（`useCollectionItems` / `useFilterOptions` / `useFilteredItems`）。
+- **详情导航下沉**：详情抽屉的上一条/下一条导航由 `useDetailNavigation.ts` 接管，并兼容表格排序后的导航顺序。
+- **引用预取下沉**：详情引用生成与列表页引用预取由 `useCitationManager.ts` 内部 effect 管理，`App.tsx` 仅消费 `detailCitationState`。
+- **确认弹窗复用**：分析/删除/终止确认弹窗统一复用 `ConfirmModal.tsx`，减少页面内 JSX 分支。
+- **工具条组件化**：工作台顶部工具条拆分为 `WorkbenchToolbar.tsx`，负责搜索/筛选/列配置/分析/删除的 UI 组装。
+- **视图选中状态隔离**：Zotero 视图与矩阵视图的表格选中行状态独立保存，切换视图互不影响。
 
 ## 开发服务器启动指南
 

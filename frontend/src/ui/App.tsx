@@ -3,42 +3,31 @@ import {
   ConfigProvider,
   Layout,
   Button,
-  Alert,
-  Popover,
-  Input,
-  Space,
   App as AntApp,
   Segmented,
-  Modal,
-  message,
 } from 'antd'
 import {
-  PlayCircleOutlined,
-  SearchOutlined,
-  DeleteOutlined,
-  StopOutlined,
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import zhCN from 'antd/locale/zh_CN'
 
 import type { LiteratureItem } from '../types'
-import {
-  updateItem as updateItemRpc,
-} from '../lib/backend'
 import { AppSidebar } from './components/AppSidebar'
 import { LiteratureTable, type LiteratureTableView } from './components/LiteratureTable'
 import { TitleBar } from './components/TitleBar'
 import { SettingsPage } from './components/SettingsPage'
 import { SettingsSidebar } from './components/SettingsSidebar'
-import { ColumnSettingsPopover } from './components/ColumnSettingsPopover'
-import { LiteratureFilterPopover } from './components/LiteratureFilterPopover'
 import { LiteratureDetailDrawer, type LiteratureDetailDrawerMode } from './components/LiteratureDetailDrawer'
+import { ConfirmModal } from './components/ConfirmModal'
+import { WorkbenchToolbar } from './components/WorkbenchToolbar'
 import { useAppConfig } from './hooks/useAppConfig'
 import { useAppTheme } from './hooks/useAppTheme'
 import { useAnalysisState } from './hooks/useAnalysisState'
 import { useCitationManager } from './hooks/useCitationManager'
 import { useColumnConfig } from './hooks/useColumnConfig'
-import { useFilterState } from './hooks/useFilterState'
+import { useDetailNavigation } from './hooks/useDetailNavigation'
+import { useCollectionItems, useFilterOptions, useFilteredItems, useFilterState } from './hooks/useFilterState'
+import { useItemUpdater } from './hooks/useItemUpdater'
 import { useLibraryState, useZoteroWatch } from './hooks/useLibraryState'
 import { STORAGE_KEYS, deleteKey, readString, writeString } from './lib/storage'
 import { collectCollectionKeys } from './lib/collectionUtils'
@@ -52,11 +41,19 @@ export default function App() {
   const analysisInProgressRef = useRef(false)
   const { library, setLibrary, refreshingLibrary, refreshError, setRefreshError, lastRefreshAt, refreshLibrary, handleRefresh } =
     useLibraryState(analysisInProgressRef)
-  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [selectedRowKeysByView, setSelectedRowKeysByView] = useState<{ zotero: React.Key[]; matrix: React.Key[] }>({ zotero: [], matrix: [] })
   const [activeCollectionKey, setActiveCollectionKey] = useState<string | null>(() => readString(STORAGE_KEYS.ACTIVE_COLLECTION))
   const [activeItemKey, setActiveItemKey] = useState<string | null>(null)
   const [detailLeaveGuard, setDetailLeaveGuard] = useState<null | (() => Promise<boolean>)>(null)
   const [activeView, setActiveView] = useState(() => readString(STORAGE_KEYS.ACTIVE_VIEW) ?? 'zotero')
+  const activeViewKey = activeView === 'matrix' ? 'matrix' : 'zotero'
+  const selectedRowKeys = selectedRowKeysByView[activeViewKey]
+  const setSelectedRowKeys = useCallback(
+    (next: React.Key[]) => {
+      setSelectedRowKeysByView((prev) => ({ ...prev, [activeViewKey]: next }))
+    },
+    [activeViewKey]
+  )
   const {
     filterMode,
     setFilterMode,
@@ -106,8 +103,11 @@ export default function App() {
     tableAnalysisColumns,
     citationColumnVisible,
   } = useColumnConfig(rawConfig, setRawConfig, metaFieldDefs, analysisFieldDefs, activeView)
-  const { citationsTick, detailCitationState, setDetailCitationState, citationCacheRef, citationsInFlightRef, ensureCitations } =
-    useCitationManager(library, setLibrary)
+  const { detailCitationState } = useCitationManager(library, setLibrary, {
+    activeItemKey,
+    currentPageRows,
+    citationColumnVisible,
+  })
   const {
     analysisInProgress,
     stoppingAnalysis,
@@ -122,6 +122,7 @@ export default function App() {
     handleStopAnalysisRequest,
     handleConfirmStopAnalysis,
   } = useAnalysisState(library, setLibrary, selectedRowKeys, setSelectedRowKeys, handleRefresh, analysisInProgressRef)
+  const { saveMatrixPatch } = useItemUpdater(setLibrary)
 
   const handleSelectCollection = useCallback((key: string) => {
     setActiveCollectionKey(key)
@@ -190,221 +191,16 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [mode])
 
-  const collectionItems = useMemo(() => {
-    return activeCollectionKey
-      ? library.items.filter((it) =>
-        (it.collections ?? []).some((c) => c.key === activeCollectionKey || c.pathKeyChain?.includes(activeCollectionKey))
-      )
-      : library.items
-  }, [activeCollectionKey, library.items])
-
-  const filterYearOptions = useMemo(() => {
-    const years = new Set<number>()
-    for (const it of collectionItems) {
-      const raw = String((it as unknown as Record<string, unknown>).year ?? '')
-      const y = Number.parseInt(raw.replace(/[^\d]/g, ''), 10)
-      if (Number.isFinite(y) && y > 0) years.add(y)
-    }
-    return Array.from(years)
-      .sort((a, b) => b - a)
-      .map((y) => ({ value: String(y), label: String(y) }))
-  }, [collectionItems])
-
-  const filterTypeOptions = useMemo(() => {
-    const types = new Set<string>()
-    for (const it of collectionItems) {
-      const raw = String(((it as unknown as Record<string, unknown>).type ?? it.bib_type ?? '') as unknown)
-        .trim()
-        .replace(/\s+/g, ' ')
-      if (raw) types.add(raw)
-    }
-    return Array.from(types)
-      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
-      .map((t) => ({ value: t, label: t }))
-  }, [collectionItems])
-
-  const filterTagOptions = useMemo(() => {
-    const allTags = new Set<string>()
-    for (const it of collectionItems) {
-      const metaExtra = (it as Record<string, unknown>).meta_extra
-      const tags = metaExtra && typeof metaExtra === 'object' ? (metaExtra as Record<string, unknown>).tags : null
-      if (Array.isArray(tags)) {
-        for (const t of tags) {
-          const s = String(t || '').trim()
-          if (s) allTags.add(s)
-        }
-      }
-    }
-    return Array.from(allTags)
-      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
-      .map((t) => ({ value: t, label: t }))
-  }, [collectionItems])
-
-  const filterKeywordOptions = useMemo(() => {
-    const allKeywords = new Set<string>()
-    for (const it of collectionItems) {
-      const val = (it as Record<string, unknown>).key_word
-      if (Array.isArray(val)) {
-        for (const k of val) {
-          const s = String(k || '').trim()
-          if (s) allKeywords.add(s)
-        }
-      } else if (typeof val === 'string' && val.trim().length > 0) {
-        const parts = val.split(/[,，;；\n]/).map((s) => s.trim()).filter(Boolean)
-        for (const p of parts) allKeywords.add(p)
-      }
-    }
-    return Array.from(allKeywords)
-      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
-      .map((t) => ({ value: t, label: t }))
-  }, [collectionItems])
-
-  const filterBibTypeOptions = useMemo(() => {
-    const types = new Set<string>()
-    for (const it of collectionItems) {
-      const raw = String(((it as unknown as Record<string, unknown>).bib_type ?? '') as unknown)
-        .trim()
-        .replace(/\s+/g, ' ')
-      if (raw) types.add(raw)
-    }
-    return Array.from(types)
-      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
-      .map((t) => ({ value: t, label: t }))
-  }, [collectionItems])
-
-  // 根据集合与状态筛选条目：
-  // - 集合命中规则：集合 key 命中或 pathKeyChain 包含（选中父集合会包含其子集合条目）
-  const filteredItems = useMemo(() => {
-    const byStatus =
-      filterMode === 'all'
-        ? collectionItems
-        : filterMode === 'unprocessed'
-          ? collectionItems.filter((it) => it.processed_status !== 'done' && it.processed_status !== 'reanalyzing')
-          : collectionItems.filter((it) => it.processed_status === 'done' || it.processed_status === 'reanalyzing')
-
-    const q = normalizedSearchQuery
-    const normalizeText = (v: unknown) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
-
-    const predicates: Array<(it: LiteratureItem) => boolean> = []
-
-    const yearRaw = fieldFilter.year.trim()
-    if (yearRaw) {
-      const targetYear = Number.parseInt(yearRaw, 10)
-      if (Number.isFinite(targetYear)) {
-        predicates.push((it) => {
-          const raw = String((it as unknown as Record<string, unknown>).year ?? '')
-          const y = Number.parseInt(raw.replace(/[^\d]/g, ''), 10)
-          if (!Number.isFinite(y)) return false
-          if (fieldFilter.yearOp === 'gt') return y > targetYear
-          if (fieldFilter.yearOp === 'lt') return y < targetYear
-          return y === targetYear
-        })
-      }
-    }
-
-    const bibTypeRaw = fieldFilter.bibType.trim()
-    if (bibTypeRaw) {
-      const target = normalizeText(bibTypeRaw)
-      predicates.push((it) => {
-        const v = ((it as unknown as Record<string, unknown>).bib_type ?? '') as unknown
-        return normalizeText(v) === target
-      })
-    }
-
-    const typeRaw = fieldFilter.type.trim()
-    if (typeRaw) {
-      const target = normalizeText(typeRaw)
-      predicates.push((it) => {
-        const v = ((it as unknown as Record<string, unknown>).type ?? it.bib_type ?? '') as unknown
-        return normalizeText(v) === target
-      })
-    }
-
-    const pubRaw = fieldFilter.publications.trim()
-    if (pubRaw) {
-      const target = normalizeText(pubRaw)
-      predicates.push((it) => {
-        const v = ((it as unknown as Record<string, unknown>).publications ?? '') as unknown
-        return normalizeText(v).includes(target)
-      })
-    }
-
-    if (fieldFilter.tags.length > 0) {
-      const targetSet = new Set(fieldFilter.tags)
-      predicates.push((it) => {
-        const metaExtra = (it as Record<string, unknown>).meta_extra
-        const tags = metaExtra && typeof metaExtra === 'object' ? (metaExtra as Record<string, unknown>).tags : null
-        if (!Array.isArray(tags)) return false
-        return tags.some((t) => targetSet.has(String(t || '').trim()))
-      })
-    }
-
-    if (fieldFilter.keywords.length > 0) {
-      const targetSet = new Set(fieldFilter.keywords)
-      predicates.push((it) => {
-        const val = (it as Record<string, unknown>).key_word
-        let currentKeywords: string[] = []
-        if (Array.isArray(val)) {
-          currentKeywords = val.map((x) => String(x || '').trim()).filter(Boolean)
-        } else if (typeof val === 'string' && val.trim().length > 0) {
-          currentKeywords = val.split(/[,，;；\n]/).map((s) => s.trim()).filter(Boolean)
-        }
-        return currentKeywords.some((k) => targetSet.has(k))
-      })
-    }
-
-    const byFieldFilter =
-      predicates.length === 0
-        ? byStatus
-        : byStatus.filter((it) => (fieldFilter.match === 'all' ? predicates.every((p) => p(it)) : predicates.some((p) => p(it))))
-
-    if (!q) return byFieldFilter
-
-    return byFieldFilter.filter((it) => {
-      const title = normalizeText(it.title)
-      const author = normalizeText(it.author)
-      return title.includes(q) || author.includes(q)
-    })
-  }, [activeView, collectionItems, fieldFilter, filterMode, normalizedSearchQuery])
-
-  const activeItem = useMemo(
-    () => (activeItemKey ? library.items.find((it) => it.item_key === activeItemKey) ?? null : null),
-    [activeItemKey, library.items]
+  const collectionItems = useCollectionItems(library, activeCollectionKey)
+  const { filterYearOptions, filterTypeOptions, filterTagOptions, filterKeywordOptions, filterBibTypeOptions } = useFilterOptions(collectionItems)
+  const filteredItems = useFilteredItems(collectionItems, filterMode, fieldFilter, normalizedSearchQuery)
+  const { activeItem, canPrevDetail, canNextDetail, goPrevDetail, goNextDetail } = useDetailNavigation(
+    library.items,
+    filteredItems,
+    tableSortedKeys,
+    activeItemKey,
+    setActiveItemKey
   )
-
-  const filteredItemKeys = useMemo(() => {
-    return filteredItems
-      .map((it) => it.item_key)
-      .filter((k): k is string => typeof k === 'string' && k.trim().length > 0)
-  }, [filteredItems])
-
-  const detailNavKeys = useMemo(() => {
-    if (tableSortedKeys.length === filteredItemKeys.length) {
-      const pool = new Set(filteredItemKeys)
-      if (tableSortedKeys.every((k) => pool.has(k))) return tableSortedKeys
-    }
-    return filteredItemKeys
-  }, [filteredItemKeys, tableSortedKeys])
-
-  const activeItemIndex = useMemo(() => {
-    if (!activeItemKey) return -1
-    return detailNavKeys.indexOf(activeItemKey)
-  }, [activeItemKey, detailNavKeys])
-
-  const canPrevDetail = activeItemIndex > 0
-  const canNextDetail = activeItemIndex >= 0 && activeItemIndex < detailNavKeys.length - 1
-
-  const goPrevDetail = useCallback(() => {
-    if (!canPrevDetail) return
-    const prevKey = detailNavKeys[activeItemIndex - 1]
-    if (prevKey) setActiveItemKey(prevKey)
-  }, [activeItemIndex, canPrevDetail, detailNavKeys])
-
-  const goNextDetail = useCallback(() => {
-    if (!canNextDetail) return
-    const nextKey = detailNavKeys[activeItemIndex + 1]
-    if (nextKey) setActiveItemKey(nextKey)
-  }, [activeItemIndex, canNextDetail, detailNavKeys])
 
   const handleTableSortedDataChange = useCallback((rows: LiteratureItem[]) => {
     const keys = rows
@@ -412,41 +208,6 @@ export default function App() {
       .filter((k): k is string => typeof k === 'string' && k.trim().length > 0)
     setTableSortedKeys(keys)
   }, [])
-
-  useEffect(() => {
-    if (!activeItemKey) {
-      setDetailCitationState({ loading: false, error: null })
-      return
-    }
-
-    const key = activeItemKey
-    const it = library.items.find((x) => x.item_key === key) as unknown as Record<string, unknown> | undefined
-    const dm = it?.date_modified
-    const cached = citationCacheRef.current.get(key)
-    const inFlight = citationsInFlightRef.current.has(key)
-    const needFetch = !inFlight && !(cached && cached.text && cached.dateModified === dm)
-
-    setDetailCitationState({ loading: inFlight || needFetch, error: null })
-    if (!needFetch) return
-
-    let canceled = false
-    void ensureCitations([key]).then((ok) => {
-      if (canceled) return
-      if (ok) setDetailCitationState({ loading: false, error: null })
-      else setDetailCitationState({ loading: false, error: '引用生成失败' })
-    })
-
-    return () => {
-      canceled = true
-    }
-  }, [activeItemKey, citationsTick, ensureCitations, library.items])
-
-  useEffect(() => {
-    if (!citationColumnVisible) return
-    const keys = currentPageRows.map((it) => it.item_key).filter(Boolean)
-    if (keys.length === 0) return
-    void ensureCitations(keys)
-  }, [citationColumnVisible, currentPageRows, ensureCitations])
   const closeConfirmModal = useCallback(() => {
     setConfirmModal((prev) => ({ ...prev, open: false }))
   }, [setConfirmModal])
@@ -560,119 +321,46 @@ export default function App() {
                       />
                     </div>
 
-                    <div data-tauri-drag-region="false" className="flex items-center gap-3">
-                      <span className="text-xs secondary-color">已选 {selectedRowKeys.length} 条</span>
-
-                      <Space size={8}>
-                        <Popover
-                          trigger="click"
-                          placement="bottomRight"
-                          open={searchPopoverOpen}
-                          onOpenChange={(open) => {
-                            setSearchPopoverOpen(open)
-                            if (open) window.setTimeout(() => searchInputElRef.current?.focus(), 0)
-                          }}
-                          content={
-                            <div data-tauri-drag-region="false" className="w-80">
-                              <div className="text-xs secondary-color mb-2">搜索当前集合</div>
-                              <Input
-                                placeholder="搜索标题/作者"
-                                allowClear
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Escape') {
-                                    e.preventDefault()
-                                    e.stopPropagation()
-                                    setSearchPopoverOpen(false)
-                                  }
-                                }}
-                                ref={(node) => {
-                                  searchInputElRef.current = (node as unknown as { input?: HTMLInputElement } | null)?.input ?? null
-                                }}
-                              />
-                              <div className="mt-2 text-[11px] secondary-color">
-                                {normalizedSearchQuery ? `匹配 ${filteredItems.length} 条（标题/作者模糊）` : '支持模糊搜索：标题、作者'}
-                              </div>
-                            </div>
-                          }
-                        >
-                          <Button
-                            key="search"
-                            icon={<SearchOutlined />}
-                            aria-label="搜索当前集合"
-                            title="搜索当前集合（Ctrl+F）"
-                            style={activeSearchButtonStyle}
-                          />
-                        </Popover>
-                        <LiteratureFilterPopover
-                          open={filterPopoverOpen}
-                          onOpenChange={setFilterPopoverOpen}
-                          themePrimaryColor={themeToken.colorPrimary}
-                          value={{
-                            statusMode: filterMode,
-                            match: fieldFilter.match,
-                            yearOp: fieldFilter.yearOp,
-                            year: fieldFilter.year,
-                            type: fieldFilter.type,
-                            publications: fieldFilter.publications,
-                            tags: fieldFilter.tags,
-                            keywords: fieldFilter.keywords,
-                            bibType: fieldFilter.bibType,
-                          }}
-                          onChange={(next) => {
-                            setFilterMode(next.statusMode)
-                            setFieldFilter({
-                              match: next.match,
-                              yearOp: next.yearOp,
-                              year: next.year,
-                              type: next.type,
-                              publications: next.publications,
-                              tags: next.tags ?? [],
-                              keywords: next.keywords ?? [],
-                              bibType: next.bibType ?? '',
-                            })
-                          }}
-                          yearOptions={filterYearOptions}
-                          typeOptions={filterTypeOptions}
-                          tagOptions={filterTagOptions}
-                          keywordOptions={filterKeywordOptions}
-                          bibTypeOptions={filterBibTypeOptions}
-                          hideStatus={activeView === 'matrix'}
-                        />
-                        <ColumnSettingsPopover
-                          open={columnsPopoverOpen}
-                          onOpenChange={setColumnsPopoverOpen}
-                          activeView={activeView as LiteratureTableView}
-                          metaPanel={metaColumnPanel}
-                          analysisPanel={analysisColumnPanel}
-                          metaFieldDefs={metaFieldDefs}
-                          analysisFieldDefs={analysisFieldDefs}
-                          getFieldName={getFieldName}
-                          applyMetaPanelChange={applyMetaPanelChange}
-                          applyAnalysisPanelChange={applyAnalysisPanelChange}
-                        />
-                        <Button
-                          key="analyze"
-                          type={analysisInProgress ? 'default' : 'primary'}
-                          danger={analysisInProgress}
-                          icon={analysisInProgress ? <StopOutlined /> : <PlayCircleOutlined />}
-                          onClick={analysisInProgress ? handleStopAnalysisRequest : handleAnalysisRequest}
-                          disabled={analysisInProgress ? stoppingAnalysis : selectedRowKeys.length === 0}
-                        >
-                          {analysisInProgress ? '终止分析' : '开始分析'}
-                        </Button>
-                        {activeView === 'matrix' ? (
-                          <Button
-                            key="delete_extracted"
-                            danger
-                            icon={<DeleteOutlined />}
-                            onClick={handleDeleteRequest}
-                            disabled={selectedRowKeys.length === 0 || deletingExtracted}
-                          >
-                          </Button>
-                        ) : null}
-                      </Space>
+                    <div data-tauri-drag-region="false">
+                      <WorkbenchToolbar
+                        selectedCount={selectedRowKeys.length}
+                        activeView={activeView as LiteratureTableView}
+                        normalizedSearchQuery={normalizedSearchQuery}
+                        searchQuery={searchQuery}
+                        setSearchQuery={setSearchQuery}
+                        searchPopoverOpen={searchPopoverOpen}
+                        setSearchPopoverOpen={setSearchPopoverOpen}
+                        searchInputElRef={searchInputElRef}
+                        activeSearchButtonStyle={activeSearchButtonStyle}
+                        filterMode={filterMode}
+                        setFilterMode={setFilterMode}
+                        fieldFilter={fieldFilter}
+                        setFieldFilter={setFieldFilter}
+                        filterPopoverOpen={filterPopoverOpen}
+                        setFilterPopoverOpen={setFilterPopoverOpen}
+                        themePrimaryColor={themeToken.colorPrimary}
+                        yearOptions={filterYearOptions}
+                        typeOptions={filterTypeOptions}
+                        tagOptions={filterTagOptions}
+                        keywordOptions={filterKeywordOptions}
+                        bibTypeOptions={filterBibTypeOptions}
+                        columnsPopoverOpen={columnsPopoverOpen}
+                        setColumnsPopoverOpen={setColumnsPopoverOpen}
+                        metaPanel={metaColumnPanel}
+                        analysisPanel={analysisColumnPanel}
+                        metaFieldDefs={metaFieldDefs}
+                        analysisFieldDefs={analysisFieldDefs}
+                        getFieldName={getFieldName}
+                        applyMetaPanelChange={applyMetaPanelChange}
+                        applyAnalysisPanelChange={applyAnalysisPanelChange}
+                        analysisInProgress={analysisInProgress}
+                        stoppingAnalysis={stoppingAnalysis}
+                        onAnalyzeRequest={handleAnalysisRequest}
+                        onStopRequest={handleStopAnalysisRequest}
+                        deletingExtracted={deletingExtracted}
+                        onDeleteRequest={handleDeleteRequest}
+                        filteredItemsCount={filteredItems.length}
+                      />
                     </div>
                   </div>
 
@@ -711,7 +399,7 @@ export default function App() {
 
           {mode === 'workbench' ? (
             <>
-              <Modal
+              <ConfirmModal
                 open={confirmModal.open}
                 onCancel={closeConfirmModal}
                 title={
@@ -723,22 +411,55 @@ export default function App() {
                         ? '分析确认'
                         : confirmModal.type === 'stop'
                           ? (
-                            <span className="text-red-600">
-                              <ExclamationCircleOutlined className="mr-2" />
-                              终止分析确认
+                            <span className="inline-flex items-center gap-2">
+                              <ExclamationCircleOutlined className="text-amber-600" />
+                              <span className="text-slate-900">终止分析确认</span>
                             </span>
                           )
                           : '确认'
                 }
+                content={
+                  confirmModal.type === 'delete' ? (
+                    <div>将清除 {selectedItemStats.total} 条文献的分析字段（不删除标题/作者/年份等元数据），并尝试删除飞书表格中的对应条目。</div>
+                  ) : confirmModal.type === 'analyze' ? (
+                    <div>将重新分析已完成的 {selectedItemStats.total} 条文献，是否继续？</div>
+                  ) : confirmModal.type === 'mixed_analyze' ? (
+                    <div>
+                      已选 {selectedItemStats.total} 条文献，其中已完成分析 {selectedItemStats.done} 条。
+                    </div>
+                  ) : confirmModal.type === 'stop' ? (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                      <div className="flex items-start gap-2">
+                        <ExclamationCircleOutlined className="mt-0.5 text-amber-600" />
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-amber-900">将尝试终止当前分析任务</div>
+                          <div className="mt-1 text-sm leading-6 text-amber-800">
+                            终止后会取消待分析任务，并恢复文献状态，是否继续？
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null
+                }
+                type={confirmModal.type === 'delete' || confirmModal.type === 'stop' ? 'danger' : 'primary'}
+                confirmText={confirmModal.type === 'delete' ? '删除' : confirmModal.type === 'stop' ? '终止' : '确定'}
+                loading={confirmModal.type === 'stop' ? stoppingAnalysis : false}
+                onConfirm={
+                  confirmModal.type === 'delete'
+                    ? handleConfirmDelete
+                    : confirmModal.type === 'stop'
+                      ? handleConfirmStopAnalysis
+                      : handleConfirmAnalysis
+                }
                 footer={
-                  confirmModal.type === 'mixed_analyze'
-                    ? [
+                  confirmModal.type === 'mixed_analyze' ? (
+                    <>
                       <Button key="cancel" onClick={closeConfirmModal}>
                         取消
-                      </Button>,
+                      </Button>
                       <Button key="reanalyze_all" onClick={handleConfirmAnalysis}>
                         分析全部
-                      </Button>,
+                      </Button>
                       <Button
                         key="only_unprocessed"
                         type="primary"
@@ -746,47 +467,11 @@ export default function App() {
                         disabled={selectedItemStats.unprocessed <= 0}
                       >
                         仅分析未完成（{selectedItemStats.unprocessed}）
-                      </Button>,
-                    ]
-                    : [
-                      <Button key="cancel" onClick={closeConfirmModal}>
-                        取消
-                      </Button>,
-                      <Button
-                        key="ok"
-                        type="primary"
-                        danger={confirmModal.type === 'delete' || confirmModal.type === 'stop'}
-                        loading={confirmModal.type === 'stop' ? stoppingAnalysis : undefined}
-                        onClick={
-                          confirmModal.type === 'delete'
-                            ? handleConfirmDelete
-                            : confirmModal.type === 'stop'
-                              ? handleConfirmStopAnalysis
-                              : handleConfirmAnalysis
-                        }
-                      >
-                        {confirmModal.type === 'delete' ? '删除' : confirmModal.type === 'stop' ? '终止' : '确定'}
-                      </Button>,
-                    ]
+                      </Button>
+                    </>
+                  ) : undefined
                 }
-              >
-                {confirmModal.type === 'delete' ? (
-                  <div>将清除 {selectedItemStats.total} 条文献的分析字段（不删除标题/作者/年份等元数据），并尝试删除飞书表格中的对应条目。</div>
-                ) : confirmModal.type === 'analyze' ? (
-                  <div>将重新分析已完成的 {selectedItemStats.total} 条文献，是否继续？</div>
-                ) : confirmModal.type === 'mixed_analyze' ? (
-                  <div>
-                    已选 {selectedItemStats.total} 条文献，其中已完成分析 {selectedItemStats.done} 条。
-                  </div>
-                ) : confirmModal.type === 'stop' ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message="将尝试终止当前分析任务"
-                    description="终止后会取消待分析任务，并恢复文献状态，是否继续？"
-                  />
-                ) : null}
-              </Modal>
+              />
 
               <LiteratureDetailDrawer
                 item={activeItem}
@@ -803,19 +488,7 @@ export default function App() {
                 canNext={canNextDetail}
                 onSave={
                   detailMode === 'matrix'
-                    ? async (key, patch) => {
-                      try {
-                        await updateItemRpc(key, patch)
-                        setLibrary((prev) => ({
-                          ...prev,
-                          items: prev.items.map((it) => (it.item_key === key ? { ...it, ...patch } : it)),
-                        }))
-                      } catch (e) {
-                        const msg = e instanceof Error ? e.message : '保存失败'
-                        message.error(msg)
-                        throw e instanceof Error ? e : new Error(msg)
-                      }
-                    }
+                    ? saveMatrixPatch
                     : undefined
                 }
               />

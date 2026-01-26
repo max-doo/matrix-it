@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 异步 LLM 调用封装（并行分析链路）。
 
@@ -9,8 +11,10 @@
 """
 
 import asyncio
+import base64
 import json
 import sys
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 try:
@@ -19,7 +23,15 @@ try:
 except ImportError:
     AIOHTTP_AVAILABLE = False
 
-from matrixit_backend.llm import LlmError, _chat_completions_url, _extract_json, _safe_base_url, _safe_preview
+from matrixit_backend.llm import (
+    LlmError,
+    _chat_completions_url,
+    _extract_json,
+    _responses_extract_text,
+    _responses_url,
+    _safe_base_url,
+    _safe_preview,
+)
 
 
 class AsyncLLMAnalyzer:
@@ -138,6 +150,101 @@ class AsyncLLMAnalyzer:
                 pass
         
         return parsed
+
+    async def responses_pdf_json_async(
+        self,
+        session: aiohttp.ClientSession,
+        llm_cfg: dict,
+        system_prompt: str,
+        user_content: str,
+        pdf_path: str,
+        item_key: str,
+        debug: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        max_bytes = int(llm_cfg.get("max_pdf_bytes", 8 * 1024 * 1024))
+        p = Path(pdf_path)
+        if not p.exists():
+            raise LlmError("PDF_NOT_FOUND", "PDF 文件不存在")
+        size = p.stat().st_size
+        if size > max_bytes:
+            raise LlmError("PDF_TOO_LARGE", f"PDF 文件过大: {size} bytes")
+
+        pdf_b64 = await asyncio.to_thread(lambda: base64.b64encode(p.read_bytes()).decode("ascii"))
+        file_data = f"data:application/pdf;base64,{pdf_b64}"
+
+        payload = {
+            "model": llm_cfg["model"],
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_file", "file_data": file_data, "filename": p.name},
+                        {"type": "input_text", "text": user_content},
+                    ],
+                },
+            ],
+            "temperature": llm_cfg.get("temperature", 0.2),
+        }
+        url = _responses_url(str(llm_cfg["base_url"]))
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {llm_cfg['api_key']}",
+            "User-Agent": "MatrixIt/1.0.0",
+        }
+
+        if debug:
+            try:
+                debug(
+                    {
+                        "api": "responses_async",
+                        "url": _safe_base_url(url),
+                        "model": llm_cfg.get("model"),
+                        "item_key": item_key,
+                        "pdf_bytes": size,
+                    }
+                )
+            except Exception:
+                pass
+
+        try:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                status = resp.status
+                body = await resp.text()
+                if status >= 400:
+                    raise LlmError("LLM_HTTP_ERROR", f"模型请求失败: HTTP {status} - {body[:200]}")
+                if debug:
+                    try:
+                        debug({"status": status, "response_bytes": len(body), "item_key": item_key})
+                    except Exception:
+                        pass
+        except aiohttp.ClientError as e:
+            raise LlmError("LLM_NETWORK_ERROR", f"模型网络请求失败: {e}") from e
+        except asyncio.TimeoutError:
+            raise LlmError("LLM_TIMEOUT", "模型请求超时") from None
+
+        try:
+            obj = json.loads(body)
+            if not isinstance(obj, dict):
+                raise LlmError("LLM_RESPONSE_INVALID", "模型响应不是 JSON 对象")
+        except LlmError:
+            raise
+        except Exception as e:
+            raise LlmError("LLM_RESPONSE_INVALID", "模型响应不是有效 JSON") from e
+
+        text = _responses_extract_text(obj)
+        if debug:
+            try:
+                debug({"content_preview": _safe_preview(text), "content_chars": len(text), "item_key": item_key})
+            except Exception:
+                pass
+        parsed = _extract_json(text)
+        if debug:
+            try:
+                debug({"parsed_keys": list(parsed.keys()), "item_key": item_key})
+            except Exception:
+                pass
+        return parsed
     
     async def analyze_single(
         self,
@@ -169,6 +276,41 @@ class AsyncLLMAnalyzer:
         async with self.semaphore:
             try:
                 result = await self.chat_json_async(session, llm_cfg, messages, item_key, debug)
+                return {
+                    "item_key": item_key,
+                    "success": True,
+                    "result": result,
+                }
+            except LlmError as e:
+                return {
+                    "item_key": item_key,
+                    "success": False,
+                    "error": e.message,
+                    "error_code": e.code,
+                }
+            except Exception as e:
+                return {
+                    "item_key": item_key,
+                    "success": False,
+                    "error": str(e),
+                    "error_code": "UNKNOWN_ERROR",
+                }
+
+    async def analyze_single_responses(
+        self,
+        session: aiohttp.ClientSession,
+        item_key: str,
+        llm_cfg: dict,
+        system_prompt: str,
+        user_content: str,
+        pdf_path: str,
+        debug: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        async with self.semaphore:
+            try:
+                result = await self.responses_pdf_json_async(
+                    session, llm_cfg, system_prompt, user_content, pdf_path, item_key, debug
+                )
                 return {
                     "item_key": item_key,
                     "success": True,
@@ -236,6 +378,43 @@ class AsyncLLMAnalyzer:
                     except Exception:
                         pass
         
+        return results
+
+    async def analyze_batch_responses(
+        self,
+        tasks_data: List[Dict[str, Any]],
+        llm_cfg: dict,
+        on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
+        debug: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        connector = aiohttp.TCPConnector(limit_per_host=self.parallel_count + 2)
+        timeout = aiohttp.ClientTimeout(total=int(llm_cfg.get("timeout_s", 120)))
+
+        results: List[Dict[str, Any]] = []
+
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            coros = [
+                self.analyze_single_responses(
+                    session,
+                    task["item_key"],
+                    llm_cfg,
+                    task["system_prompt"],
+                    task["user_content"],
+                    task["pdf_path"],
+                    debug,
+                )
+                for task in tasks_data
+            ]
+
+            for coro in asyncio.as_completed(coros):
+                result = await coro
+                results.append(result)
+                if on_progress:
+                    try:
+                        on_progress(result)
+                    except Exception:
+                        pass
+
         return results
 
 

@@ -76,6 +76,26 @@ def load_llm_config(config: dict) -> Optional[dict]:
         max_pdf_bytes = int(max_pdf_bytes)
     except Exception:
         max_pdf_bytes = 8 * 1024 * 1024
+    parallel_count_raw = llm_cfg.get("parallel_count") or 1
+    try:
+        parallel_count_raw = int(parallel_count_raw)
+    except Exception:
+        parallel_count_raw = 1
+    parallel_count_max = llm_cfg.get("parallel_count_max", 10)
+    try:
+        parallel_count_max = int(parallel_count_max)
+    except Exception:
+        parallel_count_max = 10
+    parallel_count_max = max(1, min(parallel_count_max, 10))
+    multimodal_parallel_count_max = llm_cfg.get("multimodal_parallel_count_max", 2)
+    try:
+        multimodal_parallel_count_max = int(multimodal_parallel_count_max)
+    except Exception:
+        multimodal_parallel_count_max = 2
+    multimodal_parallel_count_max = max(1, min(multimodal_parallel_count_max, parallel_count_max))
+    parallel_count = max(1, min(parallel_count_raw, parallel_count_max))
+    if multimodal:
+        parallel_count = max(1, min(parallel_count, multimodal_parallel_count_max))
     return {
         "api_key": api_key,
         "base_url": base_url,
@@ -86,7 +106,9 @@ def load_llm_config(config: dict) -> Optional[dict]:
         "multimodal": multimodal,
         "api": api,
         "max_pdf_bytes": max_pdf_bytes,
-        "parallel_count": int(llm_cfg.get("parallel_count") or 1),
+        "parallel_count": parallel_count,
+        "parallel_count_max": parallel_count_max,
+        "multimodal_parallel_count_max": multimodal_parallel_count_max,
     }
 
 

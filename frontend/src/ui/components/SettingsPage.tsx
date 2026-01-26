@@ -109,6 +109,8 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
         max_pdf_bytes: currentValues.max_pdf_bytes,
         multimodal: currentValues.multimodal,
         parallel_count: currentValues.parallel_count,
+        parallel_count_max: currentValues.parallel_count_max,
+        multimodal_parallel_count_max: currentValues.multimodal_parallel_count_max,
       }
     }
 
@@ -139,6 +141,8 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
         max_pdf_bytes: 20 * 1024 * 1024,
         multimodal: false,
         parallel_count: 3,
+        parallel_count_max: 10,
+        multimodal_parallel_count_max: 2,
       }
     }
 
@@ -302,6 +306,20 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
                 tooltip="同时并行处理的文献数量。建议 3-5，过高可能触发 API 限流。设为 1 则串行处理。"
               >
                 <InputNumber min={1} max={10} step={1} className="w-full" placeholder="3" />
+              </Form.Item>
+              <Form.Item
+                label="并行上限"
+                name={['llm', 'parallel_count_max']}
+                tooltip="对并行数量的强制上限，防止误配导致资源耗尽。后端会按该上限裁剪实际并发。"
+              >
+                <InputNumber min={1} max={10} step={1} className="w-full" placeholder="10" />
+              </Form.Item>
+              <Form.Item
+                label="多模态并行上限"
+                name={['llm', 'multimodal_parallel_count_max']}
+                tooltip="开启多模态时的额外并发上限。多模态会上传 PDF，建议 1-2。后端会强制按该上限裁剪。"
+              >
+                <InputNumber min={1} max={10} step={1} className="w-full" placeholder="2" />
               </Form.Item>
               <Form.Item
                 label="字符限制"
@@ -563,6 +581,8 @@ export function SettingsPage({
                             max_pdf_bytes: 20 * 1024 * 1024,
                             multimodal: false,
                             parallel_count: 3,
+                            parallel_count_max: 10,
+                            multimodal_parallel_count_max: 2,
                           },
                         })
                         message.success('已还原默认推荐值')

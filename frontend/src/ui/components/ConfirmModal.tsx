@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 
 interface ConfirmModalProps {
     open: boolean
-    title: string
+    title: ReactNode
     content: ReactNode
     onConfirm: () => void
     onCancel: () => void

@@ -2,14 +2,19 @@
  * 引用生成和缓存管理 Hook
  */
 
-import { useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { message } from 'antd'
 import type { LiteratureItem } from '../../types'
 import { formatCitations } from '../../lib/backend'
 
 export function useCitationManager<T extends { items: LiteratureItem[] }>(
     library: T,
-    setLibrary: React.Dispatch<React.SetStateAction<T>>
+    setLibrary: React.Dispatch<React.SetStateAction<T>>,
+    params?: {
+        activeItemKey?: string | null
+        currentPageRows?: LiteratureItem[]
+        citationColumnVisible?: boolean
+    }
 ) {
     const [citationsTick, setCitationsTick] = useState(0)
     const [detailCitationState, setDetailCitationState] = useState<{ loading: boolean; error: string | null }>({
@@ -88,12 +93,43 @@ export function useCitationManager<T extends { items: LiteratureItem[] }>(
         [applyCitationsToLibrary, library.items]
     )
 
+    useEffect(() => {
+        const activeItemKey = params?.activeItemKey ?? null
+        if (!activeItemKey) {
+            setDetailCitationState({ loading: false, error: null })
+            return
+        }
+
+        const it = library.items.find((x) => x.item_key === activeItemKey) as unknown as Record<string, unknown> | undefined
+        const dm = it?.date_modified
+        const cached = citationCacheRef.current.get(activeItemKey)
+        const inFlight = citationsInFlightRef.current.has(activeItemKey)
+        const needFetch = !inFlight && !(cached && cached.text && cached.dateModified === dm)
+
+        setDetailCitationState({ loading: inFlight || needFetch, error: null })
+        if (!needFetch) return
+
+        let canceled = false
+        void ensureCitations([activeItemKey]).then((ok) => {
+            if (canceled) return
+            if (ok) setDetailCitationState({ loading: false, error: null })
+            else setDetailCitationState({ loading: false, error: '引用生成失败' })
+        })
+
+        return () => {
+            canceled = true
+        }
+    }, [ensureCitations, library.items, params?.activeItemKey])
+
+    useEffect(() => {
+        if (!params?.citationColumnVisible) return
+        const keys = (params.currentPageRows ?? []).map((it) => it.item_key).filter(Boolean)
+        if (keys.length === 0) return
+        void ensureCitations(keys)
+    }, [ensureCitations, params?.citationColumnVisible, params?.currentPageRows])
+
     return {
-        citationsTick,
         detailCitationState,
-        setDetailCitationState,
-        citationCacheRef,
-        citationsInFlightRef,
-        ensureCitations,
+        ensureCitations
     }
 }

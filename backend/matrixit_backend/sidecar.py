@@ -31,25 +31,6 @@ CONFIG_DEFAULT = "config/config.json"
 FIELDS_DEFAULT = "fields.json"
 LEGACY_LITERATURE_JSON_DEFAULT = "literature.json"
 
-
-def _index_existing(items: List[dict]) -> Dict[str, dict]:
-    """
-    建立文献条目索引。
-    
-    Args:
-        items: 文献条目列表
-        
-    Returns:
-        Dict[item_key, item]: 以 item_key 为键的快速查找表
-    """
-    idx: Dict[str, dict] = {}
-    for it in items:
-        k = it.get("item_key")
-        if k:
-            idx[str(k)] = it
-    return idx
-
-
 def _build_collection_key_chain(collections: Dict[int, dict], collection_id: Optional[int]) -> List[str]:
     """
     构建收藏夹的层级路径（key 链）。
@@ -110,6 +91,91 @@ def _collection_tree(collections: Dict[int, dict]) -> List[dict]:
     return [{"key": "root", "name": "全部", "children": []}]
 
 
+def _load_fields_def(config: dict, fields_path: str) -> dict:
+    fields_def = {}
+    if isinstance(config.get("fields"), dict):
+        fields_def = config.get("fields", {})
+    else:
+        try:
+            with open(fields_path, "r", encoding="utf-8") as f:
+                fields_def = json.load(f)
+        except Exception:
+            fields_def = {}
+    return fields_def
+
+
+def _analysis_restore_status(original_status: str) -> str:
+    return "done" if original_status == "done" else "unprocessed"
+
+
+def _analysis_resolve_pdf_and_text(it: dict, zotero_dir: str, base_dir: str) -> tuple[str, str]:
+    resolved_pdf = zotero.resolve_pdf_path(it, zotero_dir, base_dir=base_dir) or ""
+    if not resolved_pdf:
+        return "", ""
+    text = pdf.extract_pdf_text(resolved_pdf) or ""
+    return str(resolved_pdf), text
+
+
+def _analysis_build_messages(system_prompt: str, user_prompt: str, pdf_text: str, llm_cfg: dict) -> tuple[list, str, str, int]:
+    max_chars = int(llm_cfg.get("max_input_chars", 12000))
+    text_in = pdf_text if len(pdf_text) <= max_chars else pdf_text[:max_chars]
+    user_content = user_prompt + "\n\n---\n\nPDF 正文：\n" + text_in
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    return messages, user_content, text_in, max_chars
+
+
+def _analysis_apply_result(it: dict, item_key: str, result: object, analysis_fields: set, emit_debug) -> bool:
+    if not isinstance(result, dict):
+        return False
+    accepted = {fk: fv for fk, fv in result.items() if fk in analysis_fields}
+    try:
+        emit_debug(
+            item_key,
+            "result",
+            {
+                "returned_keys": [str(x) for x in list(result.keys())[:60]],
+                "accepted_keys": [str(x) for x in list(accepted.keys())[:60]],
+            },
+        )
+    except Exception:
+        pass
+    if not accepted:
+        return False
+    for fk, fv in accepted.items():
+        it[fk] = fv
+    return True
+
+
+def _analysis_restore_and_emit_failed(
+    *,
+    db_path: str,
+    literature_json: str,
+    it: dict,
+    restore_status: str,
+    export_snapshot: bool,
+    payload: dict,
+) -> None:
+    it["processed_status"] = restore_status
+    if "sync_status" not in it or not it.get("sync_status"):
+        it["sync_status"] = "unsynced"
+    try:
+        storage.upsert_item(db_path, it)
+        if export_snapshot:
+            storage.export_json(db_path, literature_json)
+    except Exception as e:
+        try:
+            sys.stderr.write(
+                f"[SIDECAR] restore/export failed item={payload.get('item_key')} code={payload.get('error_code')}: {e}\n"
+            )
+            sys.stderr.flush()
+        except Exception:
+            pass
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
 def _analyze_parallel(
     keys: List[str],
     idx: Dict[str, dict],
@@ -149,8 +215,6 @@ def _analyze_parallel(
     items_map: Dict[str, dict] = {}  # item_key -> item
     original_status_map: Dict[str, str] = {}  # item_key -> 原始状态
     
-    max_chars = int(llm_cfg.get("max_input_chars", 12000))
-    
     for k in keys:
         it = idx.get(str(k))
         if not it:
@@ -162,7 +226,7 @@ def _analyze_parallel(
         
         # 记录原始状态
         original_status = it.get("processed_status", "unprocessed")
-        restore_status = "done" if original_status == "done" else "unprocessed"
+        restore_status = _analysis_restore_status(original_status)
         original_status_map[str(k)] = restore_status
         
         # 标记为处理中
@@ -173,42 +237,49 @@ def _analyze_parallel(
             pass
         print(json.dumps({"type": "started", "item_key": str(k)}, ensure_ascii=False), flush=True)
         
-        # 解析 PDF
-        resolved_pdf = zotero.resolve_pdf_path(it, zotero_dir, base_dir=base_dir) or ""
+        resolved_pdf, text = _analysis_resolve_pdf_and_text(it, zotero_dir, base_dir)
         if not resolved_pdf:
-            it["processed_status"] = restore_status
-            try:
-                storage.upsert_item(db_path, it)
-            except Exception:
-                pass
-            print(json.dumps({
-                "type": "failed", "item_key": str(k),
-                "error": "PDF_NOT_FOUND", "error_code": "PDF_NOT_FOUND"
-            }, ensure_ascii=False), flush=True)
+            _analysis_restore_and_emit_failed(
+                db_path=db_path,
+                literature_json=literature_json,
+                it=it,
+                restore_status=restore_status,
+                export_snapshot=False,
+                payload={"type": "failed", "item_key": str(k), "error": "PDF_NOT_FOUND", "error_code": "PDF_NOT_FOUND"},
+            )
             continue
-        
-        text = pdf.extract_pdf_text(resolved_pdf)
         if not text:
-            it["processed_status"] = restore_status
-            try:
-                storage.upsert_item(db_path, it)
-            except Exception:
-                pass
-            print(json.dumps({
-                "type": "failed", "item_key": str(k),
-                "error": "PDF_TEXT_EMPTY", "error_code": "PDF_TEXT_EMPTY"
-            }, ensure_ascii=False), flush=True)
+            _analysis_restore_and_emit_failed(
+                db_path=db_path,
+                literature_json=literature_json,
+                it=it,
+                restore_status=restore_status,
+                export_snapshot=False,
+                payload={"type": "failed", "item_key": str(k), "error": "PDF_TEXT_EMPTY", "error_code": "PDF_TEXT_EMPTY"},
+            )
             continue
         
         it["tldr"] = text.strip().replace("\n", " ")[:300]
+
+        if not analysis_fields:
+            _analysis_restore_and_emit_failed(
+                db_path=db_path,
+                literature_json=literature_json,
+                it=it,
+                restore_status=restore_status,
+                export_snapshot=False,
+                payload={
+                    "type": "failed",
+                    "item_key": str(k),
+                    "error": "FIELDS_DEF_INVALID",
+                    "error_code": "FIELDS_DEF_INVALID",
+                    "message": "fields.json 缺少 analysis_fields 定义",
+                },
+            )
+            continue
         
         # 构建消息
-        text_in = text if len(text) <= max_chars else text[:max_chars]
-        user_content = user_prompt + "\n\n---\n\nPDF 正文：\n" + text_in
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
+        messages, _, _, _ = _analysis_build_messages(system_prompt, user_prompt, text, llm_cfg)
         
         tasks_data.append({
             "item_key": str(k),
@@ -236,28 +307,28 @@ def _analyze_parallel(
         
         if result.get("success"):
             llm_result = result.get("result", {})
-            if isinstance(llm_result, dict):
-                accepted = {fk: fv for fk, fv in llm_result.items() if fk in analysis_fields}
-                emit_debug(item_key, "result", {
-                    "returned_keys": list(llm_result.keys())[:60],
-                    "accepted_keys": list(accepted.keys())[:60],
-                })
-                if not accepted:
-                    it["processed_status"] = restore_status
-                    it["sync_status"] = "unsynced"
-                    try:
-                        storage.upsert_item(db_path, it)
-                    except Exception:
-                        pass
-                    print(json.dumps({
-                        "type": "failed", "item_key": item_key,
-                        "error": "LLM_EMPTY_RESULT", "error_code": "LLM_EMPTY_RESULT",
-                        "message": f"模型未返回任何可写入字段",
-                    }, ensure_ascii=False), flush=True)
-                    return
-                
-                for fk, fv in accepted.items():
-                    it[fk] = fv
+            ok = _analysis_apply_result(it, item_key, llm_result, analysis_fields, emit_debug)
+            if not ok:
+                it["processed_status"] = restore_status
+                it["sync_status"] = "unsynced"
+                try:
+                    storage.upsert_item(db_path, it)
+                except Exception:
+                    pass
+                print(
+                    json.dumps(
+                        {
+                            "type": "failed",
+                            "item_key": item_key,
+                            "error": "LLM_EMPTY_RESULT",
+                            "error_code": "LLM_EMPTY_RESULT",
+                            "message": f"模型未返回任何可写入字段",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+                return
             
             it["processed_status"] = "done"
             it["sync_status"] = "unsynced"
@@ -448,15 +519,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             return
 
     idx = storage.get_items_index(db_path)
-    fields_def = {}
-    if isinstance(config.get("fields"), dict):
-        fields_def = config.get("fields", {})
-    else:
-        try:
-            with open(fields_path, "r", encoding="utf-8") as f:
-                fields_def = json.load(f)
-        except Exception:
-            fields_def = {}
+    fields_def = _load_fields_def(config, fields_path)
 
     preferred_order = (
         config.get("ui", {})
@@ -527,7 +590,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
         # 记录分析前的原始状态，用于失败时恢复
         original_status = it.get("processed_status", "unprocessed")
         # 根据原始状态决定恢复目标：done -> done, 其他 -> unprocessed
-        restore_status = "done" if original_status == "done" else "unprocessed"
+        restore_status = _analysis_restore_status(original_status)
         it["processed_status"] = "processing"
         try:
             storage.upsert_item(db_path, it)
@@ -554,103 +617,66 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
                 },
             )
 
-        resolved_pdf = zotero.resolve_pdf_path(it, zotero_dir, base_dir=base_dir) or ""
+        resolved_pdf, text = _analysis_resolve_pdf_and_text(it, zotero_dir, base_dir)
         if not resolved_pdf:
-            # 恢复原始状态，不写入 failed（failed 仅用于前端临时显示）
-            it["processed_status"] = restore_status
-            it["sync_status"] = it.get("sync_status") or "unsynced"
-            try:
-                storage.upsert_item(db_path, it)
-                storage.export_json(db_path, literature_json)
-            except Exception:
-                pass
-            print(
-                json.dumps(
-                    {
-                        "type": "failed",
-                        "item_key": str(k),
-                        "error": "PDF_NOT_FOUND",
-                        "error_code": "PDF_NOT_FOUND",
-                    },
-                    ensure_ascii=False,
-                )
-            , flush=True)
+            _analysis_restore_and_emit_failed(
+                db_path=db_path,
+                literature_json=literature_json,
+                it=it,
+                restore_status=restore_status,
+                export_snapshot=True,
+                payload={"type": "failed", "item_key": str(k), "error": "PDF_NOT_FOUND", "error_code": "PDF_NOT_FOUND"},
+            )
             continue
         emit_debug(str(k), "pdf_resolved", {"pdf_path": str(resolved_pdf)})
-        text = pdf.extract_pdf_text(resolved_pdf)
         if not text:
-            # 恢复原始状态，不写入 failed
-            it["processed_status"] = restore_status
-            it["sync_status"] = it.get("sync_status") or "unsynced"
-            try:
-                storage.upsert_item(db_path, it)
-                storage.export_json(db_path, literature_json)
-            except Exception:
-                pass
-            print(
-                json.dumps(
-                    {
-                        "type": "failed",
-                        "item_key": str(k),
-                        "error": "PDF_TEXT_EMPTY",
-                        "error_code": "PDF_TEXT_EMPTY",
-                    },
-                    ensure_ascii=False,
-                )
-            , flush=True)
+            _analysis_restore_and_emit_failed(
+                db_path=db_path,
+                literature_json=literature_json,
+                it=it,
+                restore_status=restore_status,
+                export_snapshot=True,
+                payload={"type": "failed", "item_key": str(k), "error": "PDF_TEXT_EMPTY", "error_code": "PDF_TEXT_EMPTY"},
+            )
             continue
 
         it["tldr"] = text.strip().replace("\n", " ")[:300]
 
         if not analysis_fields:
-            # 恢复原始状态，不写入 failed
-            it["processed_status"] = restore_status
-            it["sync_status"] = "unsynced"
-            try:
-                storage.upsert_item(db_path, it)
-                storage.export_json(db_path, literature_json)
-            except Exception:
-                pass
-            print(
-                json.dumps(
-                    {
-                        "type": "failed",
-                        "item_key": str(k),
-                        "error": "FIELDS_DEF_INVALID",
-                        "error_code": "FIELDS_DEF_INVALID",
-                        "message": "fields.json 缺少 analysis_fields 定义",
-                    },
-                    ensure_ascii=False,
-                )
-            , flush=True)
+            _analysis_restore_and_emit_failed(
+                db_path=db_path,
+                literature_json=literature_json,
+                it=it,
+                restore_status=restore_status,
+                export_snapshot=True,
+                payload={
+                    "type": "failed",
+                    "item_key": str(k),
+                    "error": "FIELDS_DEF_INVALID",
+                    "error_code": "FIELDS_DEF_INVALID",
+                    "message": "fields.json 缺少 analysis_fields 定义",
+                },
+            )
             continue
 
         if not llm_cfg:
-            # 恢复原始状态，不写入 failed
-            it["processed_status"] = restore_status
-            it["sync_status"] = "unsynced"
-            try:
-                storage.upsert_item(db_path, it)
-                storage.export_json(db_path, literature_json)
-            except Exception:
-                pass
-            print(
-                json.dumps(
-                    {
-                        "type": "failed",
-                        "item_key": str(k),
-                        "error": "LLM_CONFIG_MISSING",
-                        "error_code": "LLM_CONFIG_MISSING",
-                        "message": "LLM 配置不完整",
-                    },
-                    ensure_ascii=False,
-                )
-            , flush=True)
+            _analysis_restore_and_emit_failed(
+                db_path=db_path,
+                literature_json=literature_json,
+                it=it,
+                restore_status=restore_status,
+                export_snapshot=True,
+                payload={
+                    "type": "failed",
+                    "item_key": str(k),
+                    "error": "LLM_CONFIG_MISSING",
+                    "error_code": "LLM_CONFIG_MISSING",
+                    "message": "LLM 配置不完整",
+                },
+            )
             continue
 
-        max_chars = int(llm_cfg.get("max_input_chars", 12000))
-        text_in = text if len(text) <= max_chars else text[:max_chars]
-        user_content = user_prompt + "\n\n---\n\nPDF 正文：\n" + text_in
+        messages, user_content, text_in, max_chars = _analysis_build_messages(system_prompt, user_prompt, text, llm_cfg)
         emit_debug(
             str(k),
             "input",
@@ -671,11 +697,6 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
                 result = None
             except Exception:
                 result = None
-        if result is None:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ]
         try:
             if result is None:
                 result = llm.chat_json(llm_cfg, messages, debug=lambda d: emit_debug(str(k), "llm", d))
@@ -723,44 +744,26 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             , flush=True)
             continue
 
-        if isinstance(result, dict):
-            accepted = {fk: fv for fk, fv in result.items() if fk in analysis_fields}
-            emit_debug(
-                str(k),
-                "result",
-                {
-                    "returned_keys": [str(x) for x in list(result.keys())[:60]],
-                    "accepted_keys": [str(x) for x in list(accepted.keys())[:60]],
+        ok = _analysis_apply_result(it, str(k), result, analysis_fields, emit_debug)
+        if not ok:
+            returned_keys = []
+            if isinstance(result, dict):
+                returned_keys = [str(x) for x in list(result.keys())[:30]]
+            _analysis_restore_and_emit_failed(
+                db_path=db_path,
+                literature_json=literature_json,
+                it=it,
+                restore_status=restore_status,
+                export_snapshot=True,
+                payload={
+                    "type": "failed",
+                    "item_key": str(k),
+                    "error": "LLM_EMPTY_RESULT",
+                    "error_code": "LLM_EMPTY_RESULT",
+                    "message": f"模型未返回任何可写入字段，返回键={returned_keys}",
                 },
             )
-            if not accepted:
-                # 恢复原始状态，不写入 failed
-                it["processed_status"] = restore_status
-                it["sync_status"] = "unsynced"
-                try:
-                    storage.upsert_item(db_path, it)
-                    storage.export_json(db_path, literature_json)
-                except Exception:
-                    pass
-                returned_keys = [str(k) for k in list(result.keys())[:30]]
-                print(
-                    json.dumps(
-                        {
-                            "type": "failed",
-                            "item_key": str(k),
-                            "error": "LLM_EMPTY_RESULT",
-                            "error_code": "LLM_EMPTY_RESULT",
-                            "message": f"模型未返回任何可写入字段，返回键={returned_keys}",
-                        },
-                        ensure_ascii=False,
-                    ),
-                    flush=True,
-                )
-                continue
-            for fk, fv in accepted.items():
-                if analysis_fields and fk not in analysis_fields:
-                    continue
-                it[fk] = fv
+            continue
 
         it["processed_status"] = "done"
         it["sync_status"] = "unsynced"
