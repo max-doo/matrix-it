@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   ConfigProvider,
   Layout,
@@ -142,6 +143,15 @@ function ConfirmController({
  * 应用主组件：负责组装工作台/设置页布局，并将筛选、主题等状态委托给独立 hooks 管理。
  */
 export default function App() {
+  const appWindowRef = useRef<ReturnType<typeof getCurrentWindow> | null>(null)
+  useEffect(() => {
+    try {
+      appWindowRef.current = getCurrentWindow()
+    } catch {
+      appWindowRef.current = null
+    }
+  }, [])
+
   const analysisInProgressRef = useRef(false)
   const confirmApiRef = useRef<ConfirmApi | null>(null)
   const { library, setLibrary, refreshingLibrary, refreshError, setRefreshError, lastRefreshAt, refreshLibrary, handleRefresh } =
@@ -512,10 +522,19 @@ export default function App() {
               )}
             </Sider>
             <Content className="flex flex-col overflow-hidden min-h-0 relative p-4 pt-10 gap-4">
-              <div data-tauri-drag-region className="absolute top-0 left-0 right-0 h-10" />
+              <div
+                className="absolute top-0 left-0 right-0 h-10"
+                onMouseDown={(e) => {
+                  if (e.buttons !== 1) return
+                  void appWindowRef.current?.startDragging()
+                }}
+                onDoubleClick={() => {
+                  void appWindowRef.current?.toggleMaximize()
+                }}
+              />
               {mode === 'workbench' ? (
                 <div className="flex-1 min-h-0 bg-white rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 overflow-hidden flex flex-col relative">
-                  <div data-tauri-drag-region className="flex justify-between items-center shrink-0 px-4 py-3 border-b border-slate-100">
+                  <div data-tauri-drag-region="false" className="flex justify-between items-center shrink-0 px-4 py-3 border-b border-slate-100">
                     <div data-tauri-drag-region="false">
                       <Segmented
                         value={activeView}

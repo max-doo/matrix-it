@@ -104,6 +104,23 @@ export async function loadLibrary(): Promise<LibraryState> {
 }
 
 /**
+ * 批量拉取条目（仅从后端本地库读取）。
+ *
+ * 用于分析 Finished 后快速回填该条目的最新矩阵字段，避免等待整库 load_library 刷新。
+ */
+export async function getItems(itemKeys: string[]): Promise<{ items: LiteratureItem[] }> {
+  try {
+    const res = await invoke<{ items: LiteratureItem[] }>('get_items', { itemKeys })
+    if (res && Array.isArray(res.items)) return res
+    if (isTauriRuntime()) throw new Error('IPC_BAD_PAYLOAD: invalid get_items response')
+    return { items: [] }
+  } catch (e) {
+    if (isTauriRuntime()) throw normalizeInvokeError(e)
+    return { items: [] }
+  }
+}
+
+/**
  * 启动 Zotero 数据监听
  */
 export async function startZoteroWatch(dataDir: string): Promise<{ started: boolean }> {

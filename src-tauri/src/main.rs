@@ -83,6 +83,49 @@ fn ensure_sidecar_env() {
   std::env::set_var("MATRIXIT_CONFIG", cfg.to_string_lossy().to_string());
 }
 
+fn resolve_data_dir_path(root: &Path) -> PathBuf {
+  match std::env::var("MATRIXIT_DATA_DIR") {
+    Ok(v) => {
+      let p = PathBuf::from(v);
+      if p.is_absolute() {
+        p
+      } else {
+        root.join(p)
+      }
+    }
+    Err(_) => root.join("data"),
+  }
+}
+
+fn resolve_matrixit_db_path() -> PathBuf {
+  let root = find_project_root();
+  let data_dir = resolve_data_dir_path(&root);
+  match std::env::var("MATRIXIT_DB") {
+    Ok(v) => {
+      let p = PathBuf::from(v);
+      if p.is_absolute() {
+        p
+      } else {
+        data_dir.join(p)
+      }
+    }
+    Err(_) => data_dir.join("matrixit.db"),
+  }
+}
+
+fn read_item_from_matrixit_db(db_path: &Path, item_key: &str) -> Option<serde_json::Value> {
+  let conn = rusqlite::Connection::open(db_path).ok()?;
+  let _ = conn.busy_timeout(std::time::Duration::from_millis(1000));
+  let json_str: String = conn
+    .query_row(
+      "SELECT json FROM items WHERE item_key = ?",
+      [&item_key],
+      |row| row.get(0),
+    )
+    .ok()?;
+  serde_json::from_str::<serde_json::Value>(&json_str).ok()
+}
+
 fn truncate_utf8_boundary(s: &mut String, max_len: usize) {
   if s.len() <= max_len {
     return;
@@ -218,6 +261,46 @@ async fn format_citations(
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct GetItemsResponse {
+  items: serde_json::Value,
+}
+
+#[tauri::command]
+async fn get_items(app: tauri::AppHandle, item_keys: Vec<String>) -> Result<GetItemsResponse, ApiError> {
+  ensure_sidecar_env();
+  let output = app
+    .shell()
+    .sidecar("matrixit-sidecar")
+    .map_err(|e| ApiError::new("SIDE_CAR_NOT_FOUND", e.to_string()))?
+    .arg("get_items")
+    .arg(
+      serde_json::to_string(&item_keys).map_err(|e| ApiError::new("JSON", e.to_string()))?,
+    )
+    .output()
+    .await
+    .map_err(|e| ApiError::new("SIDE_CAR_EXEC_FAILED", e.to_string()))?;
+
+  if !output.status.success() {
+    return Err(ApiError::new(
+      "SIDE_CAR_NON_ZERO",
+      String::from_utf8_lossy(&output.stderr).to_string(),
+    ));
+  }
+
+  let stdout = String::from_utf8(output.stdout).map_err(|e| ApiError::new("UTF8", e.to_string()))?;
+  let v: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| ApiError::new("JSON", e.to_string()))?;
+  if let Some(err) = v.get("error") {
+    let code = err.get("code").and_then(|x| x.as_str()).unwrap_or("GET_ITEMS_FAILED");
+    let msg = err.get("message").and_then(|x| x.as_str()).unwrap_or("unknown");
+    return Err(ApiError::new(code, msg));
+  }
+
+  Ok(GetItemsResponse {
+    items: v.get("items").cloned().unwrap_or(serde_json::json!([])),
+  })
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "event", content = "data")]
 enum AnalysisEvent {
   Started { item_key: String },
@@ -248,6 +331,7 @@ async fn start_analysis(
   }
 
   ensure_sidecar_env();
+  let db_path = resolve_matrixit_db_path();
   let cmd = app
     .shell()
     .sidecar("matrixit-sidecar")
@@ -305,9 +389,11 @@ async fn start_analysis(
             current,
             total,
           });
+          let item_from_db =
+            read_item_from_matrixit_db(&db_path, &item_key).or_else(|| v.get("item").cloned());
           let _ = on_event.send(AnalysisEvent::Finished {
             item_key: item_key.clone(),
-            item: v.get("item").cloned(),
+            item: item_from_db,
           });
         }
         if v.get("type").and_then(|x| x.as_str()) == Some("failed") {
@@ -784,6 +870,7 @@ fn main() {
       start_zotero_watch,
       stop_zotero_watch,
       load_library,
+      get_items,
       format_citations,
       start_analysis,
       stop_analysis,

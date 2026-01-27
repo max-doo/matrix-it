@@ -238,17 +238,6 @@ export function WorkbenchToolbar({
           />
         ) : null}
 
-        <Button
-          key="analyze"
-          type={analysisInProgress ? 'default' : 'primary'}
-          danger={analysisInProgress}
-          icon={analysisInProgress ? <StopOutlined /> : <PlayCircleOutlined />}
-          onClick={analysisInProgress ? onStopRequest : onAnalyzeRequest}
-          disabled={analysisInProgress ? stoppingAnalysis : selectedCount === 0}
-        >
-          {analysisInProgress ? '终止分析' : '开始分析'}
-        </Button>
-
         {activeView === 'matrix' ? (
           <Button
             key="delete_extracted"
@@ -259,6 +248,17 @@ export function WorkbenchToolbar({
             disabled={selectedCount === 0}
           />
         ) : null}
+
+        <Button
+          key="analyze"
+          type={analysisInProgress ? 'default' : 'primary'}
+          danger={analysisInProgress}
+          icon={analysisInProgress ? <StopOutlined /> : <PlayCircleOutlined />}
+          onClick={analysisInProgress ? onStopRequest : onAnalyzeRequest}
+          disabled={analysisInProgress ? stoppingAnalysis : selectedCount === 0}
+        >
+          {analysisInProgress ? '终止分析' : activeView === 'matrix' ? '重新分析' : '开始分析'}
+        </Button>
       </Space>
     </div>
   )

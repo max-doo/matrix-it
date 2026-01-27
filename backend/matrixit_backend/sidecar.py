@@ -1091,6 +1091,24 @@ def update_item(literature_json: str, db_path: str, item_key: str, patch: dict) 
         pass
     return {"updated": True}
 
+def get_items(db_path: str, item_keys: List[str]) -> dict:
+    """
+    [IPC 命令] 批量读取条目（仅从本地 SQLite）。
+    
+    用于前端在分析 Finished 后快速拉取该条目的最新字段，
+    避免等待 load_library（会读取/合并 Zotero DB，可能耗时较长）。
+    
+    Returns:
+        Dict: {"items": [...]}
+    """
+    keys = [str(k).strip() for k in (item_keys or []) if str(k).strip()]
+    if not keys:
+        return {"items": []}
+    items = storage.get_items(db_path, keys=keys, timeout_s=1.0)
+    by_key = {str(it.get("item_key")): it for it in items if isinstance(it, dict) and it.get("item_key")}
+    ordered = [by_key.get(k) for k in keys if k in by_key]
+    return {"items": [it for it in ordered if isinstance(it, dict)]}
+
 def format_citations(db_path: str, item_keys: List[str]) -> dict:
     """
     [IPC 命令] 生成参考文献引用。
@@ -1183,7 +1201,7 @@ def main() -> None:
         pass
 
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: sidecar.py <diag|load_library|analyze|sync_feishu|update_item|delete_extracted_data|format_citations|clear_citations> [json_args]\n")
+        sys.stderr.write("usage: sidecar.py <diag|load_library|analyze|sync_feishu|update_item|get_items|delete_extracted_data|format_citations|clear_citations> [json_args]\n")
         sys.exit(2)
 
     cmd = sys.argv[1]
@@ -1289,6 +1307,23 @@ def main() -> None:
             sys.stdout.write(json.dumps(res, ensure_ascii=False))
         except Exception as e:
             sys.stdout.write(json.dumps({"error": {"code": "UPDATE_ITEM_FAILED", "message": str(e)}}, ensure_ascii=False))
+        return
+
+    if cmd == "get_items":
+        if len(sys.argv) < 3:
+            sys.stderr.write("get_items requires item_keys JSON array or '-' from stdin\n")
+            sys.exit(2)
+        keys_arg = sys.argv[2]
+        if keys_arg == "-":
+            raw = (sys.stdin.read() or "[]").lstrip("\ufeff").strip()
+            keys = json.loads(raw or "[]")
+        else:
+            keys = json.loads(keys_arg)
+        try:
+            payload = get_items(db_path, [str(k) for k in keys])
+            sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+        except Exception as e:
+            sys.stdout.write(json.dumps({"items": [], "error": {"code": "GET_ITEMS_FAILED", "message": str(e)}}, ensure_ascii=False))
         return
 
     if cmd == "format_citations":

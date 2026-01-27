@@ -12,6 +12,7 @@ Sidecar 通过命令行子命令提供 5 类能力：
 - `analyze`：对指定 `item_key` 列表逐条分析（直接读取 Zotero storage 的 PDF → 提取文本 → 调用 LLM 输出结构化字段），并逐条输出事件
 - `sync_feishu`：将指定 `item_key` 同步到飞书多维表（含字段自动创建、附件上传），并回写本地同步状态
 - `update_item`：对本地条目执行字段级 patch 更新（保护部分核心字段不允许改）
+- `get_items`：批量读取本地 SQLite 中的条目（不读 Zotero DB），用于分析 Finished 后即时回显矩阵字段
 - `delete_extracted_data`：清除指定条目的“分析字段”（不删除元数据），并尝试删除飞书记录
 - `format_citations`：用 CSL 引擎生成 GB/T 7714 引用（从条目 `meta_extra` 构造 CSL JSON）
 
@@ -216,7 +217,45 @@ python backend/matrixit_backend/sidecar.py update_item "ABCD1234" "{\"tldr\":\".
 
 ---
 
-### 3.5 `delete_extracted_data`
+### 3.5 `get_items`
+
+**用途**：批量读取条目（仅从本地 SQLite `matrixit.db`），用于前端在分析 Finished 后快速回填该条目的最新矩阵字段，避免等待 `load_library` 整库刷新。
+
+**请求**：
+- `cmd = "get_items"`
+- `argv[2]`：JSON 数组（item_key 列表）；若为 `-` 则从 stdin 读取 JSON
+
+示例（argv 传参）：
+
+```bash
+python backend/matrixit_backend/sidecar.py get_items "[\"ABCD1234\",\"EFGH5678\"]"
+```
+
+示例（stdin 传参）：
+
+```bash
+echo "[\"ABCD1234\",\"EFGH5678\"]" | python backend/matrixit_backend/sidecar.py get_items -
+```
+
+**响应（stdout，单个 JSON）**：
+
+成功：
+
+```json
+{ "items": [ { "item_key": "ABCD1234", "...": "..." } ] }
+```
+
+失败兜底：
+
+```json
+{ "items": [], "error": { "code": "GET_ITEMS_FAILED", "message": "..." } }
+```
+
+实现： [sidecar.py](file:///d:/Project/matrix-it/backend/matrixit_backend/sidecar.py)（`get_items` 命令）
+
+---
+
+### 3.6 `delete_extracted_data`
 
 **用途**：清除指定条目的“已提取/分析字段”（由 `fields.json` 的 `analysis_fields` 决定），不删除 Zotero 元数据；并尝试删除飞书多维表中对应记录（依赖条目上的 `record_id`）。
 
@@ -251,7 +290,7 @@ python backend/matrixit_backend/sidecar.py delete_extracted_data "[\"ABCD1234\"]
 
 ---
 
-### 3.6 `format_citations`
+### 3.7 `format_citations`
 
 **用途**：对指定条目生成 GB/T 7714-2015（顺序编码）引用文本。
 

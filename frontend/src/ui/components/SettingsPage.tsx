@@ -18,17 +18,16 @@ import {
 } from 'antd'
 import type { FormInstance } from 'antd'
 import {
-  DeleteOutlined,
   ArrowLeftOutlined,
+  DeleteOutlined,
   PlusOutlined,
   ReloadOutlined,
   HolderOutlined,
   DownOutlined,
-  CloseOutlined,
 } from '@ant-design/icons'
 
 import { DEFAULT_ANALYSIS_FIELDS } from '../defaults/analysisFields'
-import { Space, Segmented, Collapse, Tooltip, message } from 'antd'
+import { App, Space, Segmented, Collapse, Tooltip, message } from 'antd'
 import { QuestionCircleOutlined, ThunderboltOutlined, EditOutlined, ApiOutlined, CloudServerOutlined } from '@ant-design/icons'
 import { listModels } from '../../lib/backend'
 
@@ -72,6 +71,7 @@ import { Slider } from 'antd'
 function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelList, setModelList] = useState<string[]>([])
+  const lastClampRef = useRef<{ multimodal: boolean; from: number } | null>(null)
 
   // 监听 Provider 变化
   const provider = Form.useWatch(['llm', 'provider'], configForm)
@@ -109,8 +109,6 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
         max_pdf_bytes: currentValues.max_pdf_bytes,
         multimodal: currentValues.multimodal,
         parallel_count: currentValues.parallel_count,
-        parallel_count_max: currentValues.parallel_count_max,
-        multimodal_parallel_count_max: currentValues.multimodal_parallel_count_max,
       }
     }
 
@@ -120,7 +118,8 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
 
     if (targetProfile) {
       // 有存档，直接加载
-      nextValues = { ...targetProfile }
+      const { parallel_count_max: _pMax, multimodal_parallel_count_max: _mMax, ...rest } = targetProfile as Record<string, any>
+      nextValues = { ...rest }
       // 修正：如果存档中 Base URL 为空且非 Custom，则填充默认 URL
       if (!nextValues.base_url && newProvider !== 'custom') {
         const pData = PROVIDERS.find(x => x.value === newProvider)
@@ -141,15 +140,15 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
         max_pdf_bytes: 20 * 1024 * 1024,
         multimodal: false,
         parallel_count: 3,
-        parallel_count_max: 10,
-        multimodal_parallel_count_max: 2,
       }
     }
 
     // 3. 批量更新 Form
+    const currentLlmRaw = (configForm.getFieldValue('llm') || {}) as Record<string, unknown>
+    const { parallel_count_max: _pMax, multimodal_parallel_count_max: _mMax, ...currentLlm } = currentLlmRaw as Record<string, any>
     configForm.setFieldsValue({
       llm: {
-        ...configForm.getFieldValue('llm'), // 保留其他可能的字段
+        ...currentLlm, // 保留其他可能的字段
         profiles: newProfiles, // 保存更新后的 profiles
         provider: newProvider, // 更新当前 provider
         ...nextValues, // 覆盖配置项
@@ -204,6 +203,23 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
 
   // 监听温度变化
   const temp = Form.useWatch(['llm', 'temperature'], configForm)
+  const multimodal = Form.useWatch(['llm', 'multimodal'], configForm)
+  const parallelCount = Form.useWatch(['llm', 'parallel_count'], configForm)
+  const parallelCountMax = multimodal ? 2 : 10
+
+  useEffect(() => {
+    if (!multimodal) {
+      lastClampRef.current = null
+      return
+    }
+    const raw = Number(parallelCount ?? 1)
+    const v = Number.isFinite(raw) ? raw : 1
+    if (v <= 2) return
+    if (lastClampRef.current?.multimodal && lastClampRef.current.from === v) return
+    lastClampRef.current = { multimodal: true, from: v }
+    configForm.setFieldValue(['llm', 'parallel_count'], 2)
+    message.info('多模态模式下并行数量已限制为 2')
+  }, [configForm, multimodal, parallelCount])
 
   return (
     <div className="flex flex-col gap-5">
@@ -303,23 +319,9 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
               <Form.Item
                 label="并行数量"
                 name={['llm', 'parallel_count']}
-                tooltip="同时并行处理的文献数量。建议 3-5，过高可能触发 API 限流。设为 1 则串行处理。"
+                tooltip="同时并行处理的文献数量。建议 3-5，过高可能触发 API 限流。开启多模态时会自动限制为 1-2。"
               >
-                <InputNumber min={1} max={10} step={1} className="w-full" placeholder="3" />
-              </Form.Item>
-              <Form.Item
-                label="并行上限"
-                name={['llm', 'parallel_count_max']}
-                tooltip="对并行数量的强制上限，防止误配导致资源耗尽。后端会按该上限裁剪实际并发。"
-              >
-                <InputNumber min={1} max={10} step={1} className="w-full" placeholder="10" />
-              </Form.Item>
-              <Form.Item
-                label="多模态并行上限"
-                name={['llm', 'multimodal_parallel_count_max']}
-                tooltip="开启多模态时的额外并发上限。多模态会上传 PDF，建议 1-2。后端会强制按该上限裁剪。"
-              >
-                <InputNumber min={1} max={10} step={1} className="w-full" placeholder="2" />
+                <InputNumber min={1} max={parallelCountMax} step={1} className="w-full" placeholder={multimodal ? '2' : '3'} />
               </Form.Item>
               <Form.Item
                 label="字符限制"
@@ -380,6 +382,7 @@ export function SettingsPage({
   onReload: () => void
   onAutoSave: () => void
 }) {
+  const { modal } = App.useApp()
   const scrollRootRef = useRef<HTMLDivElement | null>(null)
   const zoteroRef = useRef<HTMLDivElement | null>(null)
   const llmRef = useRef<HTMLDivElement | null>(null)
@@ -389,13 +392,13 @@ export function SettingsPage({
   const dragStateRef = useRef<{ active: boolean; fromIndex: number }>({ active: false, fromIndex: -1 })
   const [expandedFieldKey, setExpandedFieldKey] = useState<number | null>(null)
 
+  const fixedAnalysisFieldKeys = useMemo(() => new Set(['tldr', 'key_word', 'bib_type']), [])
+
   const typeOptions = useMemo(
     () => [
       { value: 'string', label: '文本' },
-      { value: 'number', label: '数字' },
       { value: 'select', label: '单选' },
       { value: 'multi_select', label: '多选' },
-      { value: 'file', label: '文件' },
     ],
     []
   )
@@ -415,6 +418,12 @@ export function SettingsPage({
     if (s.length <= maxLen) return s
     return s.slice(0, maxLen - 1) + '…'
   }, [])
+
+  const handleFieldsValuesChange = useCallback(() => {
+    const hasErrors = fieldsForm.getFieldsError().some((x) => x.errors.length > 0)
+    if (hasErrors) return
+    onAutoSave()
+  }, [fieldsForm, onAutoSave])
 
   /**
    * 交互逻辑：字段拖拽排序
@@ -529,9 +538,11 @@ export function SettingsPage({
         </div>
 
         <div className="flex items-center gap-2">
-          <Button icon={<ReloadOutlined />} onClick={onReload} disabled={loading || saving}>
-            重新载入
-          </Button>
+          <Tooltip title="从已保存配置重新读取并回填（会覆盖未保存的修改）">
+            <Button icon={<ReloadOutlined />} onClick={onReload} disabled={loading || saving}>
+              重新加载配置
+            </Button>
+          </Tooltip>
         </div>
       </div>
 
@@ -568,7 +579,8 @@ export function SettingsPage({
                     <Button
                       icon={<ReloadOutlined />}
                       onClick={() => {
-                        const currentLlm = configForm.getFieldValue('llm') || {};
+                        const currentLlmRaw = (configForm.getFieldValue('llm') || {}) as Record<string, unknown>
+                        const { parallel_count_max: _pMax, multimodal_parallel_count_max: _mMax, ...currentLlm } = currentLlmRaw as Record<string, any>
                         const pData = PROVIDERS.find(x => x.value === currentLlm.provider);
                         const defaultBaseUrl = pData?.baseUrl || '';
 
@@ -581,8 +593,6 @@ export function SettingsPage({
                             max_pdf_bytes: 20 * 1024 * 1024,
                             multimodal: false,
                             parallel_count: 3,
-                            parallel_count_max: 10,
-                            multimodal_parallel_count_max: 2,
                           },
                         })
                         message.success('已还原默认推荐值')
@@ -657,7 +667,7 @@ export function SettingsPage({
                 </Typography.Paragraph>
                 <Divider className="!my-3" />
 
-                <Form form={fieldsForm} layout="vertical" requiredMark={false} onValuesChange={onAutoSave}>
+                <Form form={fieldsForm} layout="vertical" requiredMark={false} onValuesChange={handleFieldsValuesChange}>
                   <Form.List name="analysis_fields">
                     {(fields, { add, remove, move }) => (
                       <div className="flex flex-col gap-4">
@@ -697,6 +707,7 @@ export function SettingsPage({
                                 const title = cnName || k || `字段 ${idx + 1}`
                                 const modeLabel = getModeLabel(rule)
                                 const ruleText = truncate(desc || '未填写', 46)
+                                const isFixed = fixedAnalysisFieldKeys.has(k)
 
                                 return (
                                   <div
@@ -711,12 +722,12 @@ export function SettingsPage({
                                     <div className="flex items-center gap-3 px-4 py-3">
                                       <button
                                         type="button"
-                                        className="h-9 w-9 rounded-lg border border-slate-200 bg-white flex items-center justify-center cursor-grab active:cursor-grabbing"
+                                        className="h-10 w-10 bg-transparent border-0 shadow-none p-0 flex items-center justify-center cursor-grab active:cursor-grabbing focus:outline-none transition-none"
                                         aria-label="拖拽排序"
                                         onClick={(e) => e.stopPropagation()}
                                         onMouseDown={(e) => beginDrag(e, idx, move)}
                                       >
-                                        <HolderOutlined className="text-slate-500" />
+                                        <HolderOutlined className="text-slate-500 text-xl" />
                                       </button>
 
                                       <div className="min-w-0 flex-1">
@@ -731,17 +742,32 @@ export function SettingsPage({
                                         </Typography.Text>
                                       </div>
 
-                                      <Button
-                                        type="text"
-                                        danger
-                                        icon={<CloseOutlined />}
-                                        aria-label="删除字段"
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          if (expandedFieldKey === field.key) setExpandedFieldKey(null)
-                                          remove(field.name)
-                                        }}
-                                      />
+                                      {isFixed ? (
+                                        <Tooltip title="固定字段不可删除">
+                                          <Button type="text" danger disabled icon={<DeleteOutlined className="text-lg" />} aria-label="删除字段" onClick={(e) => e.stopPropagation()} />
+                                        </Tooltip>
+                                      ) : (
+                                        <Button
+                                          type="text"
+                                          danger
+                                          icon={<DeleteOutlined className="text-lg" />}
+                                          aria-label="删除字段"
+                                          onClick={(e) => {
+                                            e.stopPropagation()
+                                            void modal.confirm({
+                                              title: '删除字段确认',
+                                              content: `确认删除「${title}」？`,
+                                              okText: '删除',
+                                              okButtonProps: { danger: true },
+                                              cancelText: '取消',
+                                              onOk: () => {
+                                                if (expandedFieldKey === field.key) setExpandedFieldKey(null)
+                                                remove(field.name)
+                                              },
+                                            })
+                                          }}
+                                        />
+                                      )}
 
                                       <DownOutlined className={open ? 'text-slate-500' : 'text-slate-400 -rotate-90'} />
                                     </div>
@@ -751,13 +777,34 @@ export function SettingsPage({
                                         <Divider className="!my-3" />
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                           <Form.Item label="中文名称" name={[field.name, 'name']}>
-                                            <Input placeholder="TLDR" autoComplete="off" onClick={(e) => e.stopPropagation()} />
+                                            <Input disabled={isFixed} placeholder="TLDR" autoComplete="off" onClick={(e) => e.stopPropagation()} />
                                           </Form.Item>
-                                          <Form.Item label="字段名" name={[field.name, 'key']} rules={[{ required: true, message: '请输入字段名' }]}>
-                                            <Input placeholder="tldr" autoComplete="off" onClick={(e) => e.stopPropagation()} />
+                                          <Form.Item
+                                            label="字段名"
+                                            name={[field.name, 'key']}
+                                            validateTrigger={['onChange', 'onBlur']}
+                                            rules={[
+                                              { required: true, message: '请输入字段名' },
+                                              {
+                                                validator: async (_rule, value) => {
+                                                  const v = String(value ?? '').trim()
+                                                  if (!v) return
+                                                  if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(v)) {
+                                                    throw new Error('字段名需以字母开头，仅允许字母/数字/下划线')
+                                                  }
+                                                  const rows = fieldsForm.getFieldValue('analysis_fields') as Array<Record<string, unknown> | undefined> | undefined
+                                                  const dup = (rows ?? []).some((r, i) => i !== idx && String(r?.key ?? '').trim() === v)
+                                                  if (dup) {
+                                                    throw new Error('字段名已存在')
+                                                  }
+                                                },
+                                              },
+                                            ]}
+                                          >
+                                            <Input disabled={isFixed} placeholder="tldr" autoComplete="off" onClick={(e) => e.stopPropagation()} />
                                           </Form.Item>
                                           <Form.Item label="类型" name={[field.name, 'type']}>
-                                            <Select options={typeOptions} onClick={(e) => e.stopPropagation()} />
+                                            <Select disabled={isFixed} options={typeOptions} onClick={(e) => e.stopPropagation()} />
                                           </Form.Item>
                                           <Form.Item label="模式" name={[field.name, 'rule']}>
                                             <Select allowClear placeholder="可选" options={modeOptions} onClick={(e) => e.stopPropagation()} />

@@ -21,13 +21,19 @@ try {
 
 export function TitleBar() {
   return (
-    <div className="fixed top-0 right-0 h-8 flex items-center z-50 select-none">
+    <div data-tauri-drag-region="false" className="fixed top-0 right-0 h-8 flex items-center z-[9999] select-none">
       <div className="flex h-full">
         <div
           data-tauri-drag-region="false"
           className="inline-flex justify-center items-center w-10 h-full hover:bg-black/5 cursor-pointer transition-colors"
-          onMouseDown={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
           onClick={async () => {
             if (!appWindow) return
             try {
@@ -37,13 +43,19 @@ export function TitleBar() {
             }
           }}
         >
-          <MinusOutlined className="text-xs" />
+          <MinusOutlined className="text-xs pointer-events-none" />
         </div>
         <div
           data-tauri-drag-region="false"
           className="inline-flex justify-center items-center w-10 h-full hover:bg-black/5 cursor-pointer transition-colors"
-          onMouseDown={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
           onClick={async () => {
             if (!appWindow) return
             try {
@@ -53,13 +65,19 @@ export function TitleBar() {
             }
           }}
         >
-          <BorderOutlined className="text-xs scale-75" />
+          <BorderOutlined className="text-xs scale-75 pointer-events-none" />
         </div>
         <div
           data-tauri-drag-region="false"
           className="inline-flex justify-center items-center w-10 h-full hover:bg-red-500 hover:text-white cursor-pointer transition-colors"
-          onMouseDown={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
           onClick={async () => {
             if (!appWindow) return
             try {
@@ -69,7 +87,7 @@ export function TitleBar() {
             }
           }}
         >
-          <CloseOutlined className="text-xs" />
+          <CloseOutlined className="text-xs pointer-events-none" />
         </div>
       </div>
     </div>

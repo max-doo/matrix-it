@@ -10,7 +10,7 @@
         "description": "根据文献的内容判断文献的类型，如：研究论文、方法论论文、综述论文、案例研究、研究报告、行业指南等",
         "name": "文献类型",
         "rule": "A",
-        "type": "select"
+        "type": "multi_select"
       },
       "contribution": {
         "description": "本文对该领域最重要的理论、方法或实践贡献是什么？(引用必须紧跟在每个要点之后)",

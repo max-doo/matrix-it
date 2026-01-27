@@ -5,9 +5,7 @@
     "model": "qwen-xxx",
     "temperature": 0.2,
     "parallel_count": 3,
-    "parallel_count_max": 10,
-    "multimodal": false,
-    "multimodal_parallel_count_max": 2
+    "multimodal": false
   },
   "debug": {
     "enabled": true,

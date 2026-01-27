@@ -6,7 +6,12 @@
 import { useState, useCallback, useRef } from 'react'
 import { message } from 'antd'
 import type { AnalysisEvent, AnalysisReport, AnalysisReportItem, LiteratureItem } from '../../types'
-import { startAnalysis as startAnalysisRpc, stopAnalysis as stopAnalysisRpc, deleteExtractedData as deleteExtractedDataRpc } from '../../lib/backend'
+import {
+    startAnalysis as startAnalysisRpc,
+    stopAnalysis as stopAnalysisRpc,
+    deleteExtractedData as deleteExtractedDataRpc,
+    getItems as getItemsRpc,
+} from '../../lib/backend'
 
 export function useAnalysisState<T extends { items: LiteratureItem[] }>(
     library: T,
@@ -38,6 +43,10 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
         const startedAt = Date.now()
         const items = new Map<string, AnalysisReportItem>()
         const rawEvents: AnalysisEvent[] = []
+        const finishedFetchQueue = new Set<string>()
+        const finishedFetchAttempts = new Map<string, number>()
+        let finishedFetchTimer: number | null = null
+        let finishedFetchInFlight = false
 
         const ensureItem = (k: string) => {
             const prev = items.get(k)
@@ -57,6 +66,10 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
         const closeAnalysis = () => {
             if (closed) return
             closed = true
+            if (finishedFetchTimer !== null) {
+                window.clearTimeout(finishedFetchTimer)
+                finishedFetchTimer = null
+            }
             setAnalysisInProgress(false)
             analysisInProgressRef.current = false
             handleRefresh()
@@ -96,6 +109,75 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
         }))
         message.loading({ content: '正在分析…', key: msgKey, duration: 0 })
 
+        const flushFinishedFetchQueue = async () => {
+            if (finishedFetchInFlight) return
+            const keysToFetch = [...finishedFetchQueue]
+            finishedFetchQueue.clear()
+            if (keysToFetch.length === 0) return
+            finishedFetchInFlight = true
+            try {
+                const res = await getItemsRpc(keysToFetch)
+                const fetched = Array.isArray(res?.items) ? res.items : []
+                if (fetched.length === 0) return
+                const fetchedKeys = new Set<string>()
+                setLibrary((prev) => {
+                    const indexByKey = new Map<string, number>()
+                    const nextItems = prev.items.slice()
+                    for (let i = 0; i < nextItems.length; i++) {
+                        indexByKey.set(nextItems[i].item_key, i)
+                    }
+                    for (const next of fetched) {
+                        const k = (next as LiteratureItem).item_key
+                        if (!k) continue
+                        fetchedKeys.add(k)
+                        const idx = indexByKey.get(k)
+                        if (idx === undefined) {
+                            nextItems.push(next as LiteratureItem)
+                            indexByKey.set(k, nextItems.length - 1)
+                            continue
+                        }
+                        const prevIt = nextItems[idx]
+                        nextItems[idx] = { ...prevIt, ...(next as LiteratureItem), item_key: prevIt.item_key }
+                    }
+                    return { ...prev, items: nextItems }
+                })
+                for (const k of fetchedKeys) finishedFetchAttempts.delete(k)
+                for (const k of keysToFetch) {
+                    if (fetchedKeys.has(k)) continue
+                    const attempt = (finishedFetchAttempts.get(k) ?? 0) + 1
+                    finishedFetchAttempts.set(k, attempt)
+                    if (attempt <= 5) finishedFetchQueue.add(k)
+                }
+            } catch {
+                for (const k of keysToFetch) {
+                    const attempt = (finishedFetchAttempts.get(k) ?? 0) + 1
+                    finishedFetchAttempts.set(k, attempt)
+                    if (attempt <= 5) finishedFetchQueue.add(k)
+                }
+            } finally {
+                finishedFetchInFlight = false
+                if (finishedFetchQueue.size > 0 && !closed) {
+                    const maxAttempt = Math.max(0, ...[...finishedFetchQueue].map((k) => finishedFetchAttempts.get(k) ?? 0))
+                    const delayMs = Math.min(2000, 200 * Math.pow(2, Math.max(0, maxAttempt - 1)))
+                    finishedFetchTimer = window.setTimeout(() => {
+                        finishedFetchTimer = null
+                        void flushFinishedFetchQueue()
+                    }, delayMs)
+                }
+            }
+        }
+
+        const scheduleFinishedFetch = (k: string) => {
+            if (!k) return
+            finishedFetchQueue.add(k)
+            if (!finishedFetchAttempts.has(k)) finishedFetchAttempts.set(k, 0)
+            if (finishedFetchTimer !== null) return
+            finishedFetchTimer = window.setTimeout(() => {
+                finishedFetchTimer = null
+                void flushFinishedFetchQueue()
+            }, 200)
+        }
+
         const onEvent = (evt: AnalysisEvent) => {
             rawEvents.push(evt)
             if (evt.event === 'Started') {
@@ -122,6 +204,9 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
                         }
                     })
                 }))
+                const patchObj = patch && typeof patch === 'object' ? (patch as Record<string, unknown>) : null
+                const hasAnyPayload = !!patchObj && Object.keys(patchObj).length > 0
+                if (!hasAnyPayload) scheduleFinishedFetch(k)
             }
             if (evt.event === 'Failed') {
                 const k = evt.data.item_key
@@ -160,6 +245,7 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
                 }
             }
             if (evt.event === 'AllDone') {
+                void flushFinishedFetchQueue()
                 closeAnalysis()
             }
         }

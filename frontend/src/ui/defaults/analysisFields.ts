@@ -44,7 +44,7 @@ export const DEFAULT_ANALYSIS_FIELDS: DefaultAnalysisFieldRow[] = [
     key: 'bib_type',
     name: '文献类型',
     rule: 'A',
-    type: 'select',
+    type: 'multi_select',
     description: '根据文献的内容判断文献的类型，如：研究论文、方法论论文、综述论文、案例研究、研究报告、行业指南等',
   },
   {

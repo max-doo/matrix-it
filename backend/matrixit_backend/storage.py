@@ -71,7 +71,7 @@ def count_items(db_path: str) -> int:
         conn.close()
 
 
-def get_item(db_path: str, item_key: str) -> Optional[dict]:
+def get_item(db_path: str, item_key: str, timeout_s: float = 5.0) -> Optional[dict]:
     """
     根据 item_key 获取单个条目内容。
     
@@ -79,7 +79,7 @@ def get_item(db_path: str, item_key: str) -> Optional[dict]:
         解析后的 JSON 字典或 None (未找到)
     """
     ensure_db(db_path)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=float(timeout_s))
     try:
         cur = conn.cursor()
         cur.execute("SELECT json FROM items WHERE item_key = ?", (str(item_key),))
@@ -92,7 +92,7 @@ def get_item(db_path: str, item_key: str) -> Optional[dict]:
         conn.close()
 
 
-def get_items(db_path: str, keys: Optional[List[str]] = None) -> List[dict]:
+def get_items(db_path: str, keys: Optional[List[str]] = None, timeout_s: float = 5.0) -> List[dict]:
     """
     批量获取条目。
     
@@ -103,7 +103,7 @@ def get_items(db_path: str, keys: Optional[List[str]] = None) -> List[dict]:
         条目字典列表
     """
     ensure_db(db_path)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=float(timeout_s))
     try:
         cur = conn.cursor()
         if keys:
