@@ -28,8 +28,12 @@ def get_default_zotero_dir() -> str:
 def get_zotero_dir(config: dict) -> str:
     """从配置读取 Zotero data_dir，未配置则使用默认目录。"""
     zotero_dir = config.get("zotero", {}).get("data_dir", "")
-    if zotero_dir:
-        return zotero_dir
+    if isinstance(zotero_dir, str) and zotero_dir.strip():
+        return zotero_dir.strip()
+    if isinstance(zotero_dir, dict):
+        p = zotero_dir.get("path") or zotero_dir.get("data_dir") or zotero_dir.get("dir")
+        if isinstance(p, str) and p.strip():
+            return p.strip()
     return get_default_zotero_dir()
 
 

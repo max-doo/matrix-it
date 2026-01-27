@@ -9,6 +9,7 @@ export const STORAGE_KEYS = {
     LIBRARY_CACHE: 'matrixit.library.cache.v1',
     ACTIVE_COLLECTION: 'matrixit.ui.activeCollectionKey',
     ACTIVE_VIEW: 'matrixit.ui.activeView',
+    FEISHU_RECONCILE_AT: 'matrixit.feishu.reconcileAt',
 } as const
 
 export type LibraryCachePayload = {

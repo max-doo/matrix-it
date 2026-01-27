@@ -970,6 +970,68 @@ def sync_feishu(literature_json: str, db_path: str, root_dir: str, config_path: 
     return stats
 
 
+def reconcile_feishu(
+    literature_json: str,
+    db_path: str,
+    root_dir: str,
+    config_path: str,
+    keys: List[str],
+) -> dict:
+    config = load_config(config_path)
+    items_idx = storage.get_items_index(db_path)
+    req_keys = [str(k).strip() for k in (keys or []) if str(k).strip()]
+    targets: List[dict] = []
+    record_ids: List[str] = []
+    key_by_record_id: Dict[str, str] = {}
+
+    for k, it in items_idx.items():
+        if req_keys and str(k) not in req_keys:
+            continue
+        if not isinstance(it, dict):
+            continue
+        if it.get("processed_status") != "done":
+            continue
+        rid = str(it.get("record_id") or "").strip()
+        if not rid:
+            continue
+        if it.get("sync_status") != "synced":
+            continue
+        targets.append(it)
+        record_ids.append(rid)
+        key_by_record_id[rid] = str(k)
+
+    if not record_ids:
+        return {"checked": 0, "missing_remote": 0, "marked_unsynced": 0, "forbidden": 0}
+
+    res = feishu.batch_get_records(config, record_ids)
+    absent = set([str(x) for x in res.get("absent", []) if str(x).strip()])
+    forbidden = set([str(x) for x in res.get("forbidden", []) if str(x).strip()])
+
+    marked = 0
+    for it in targets:
+        rid = str(it.get("record_id") or "").strip()
+        if not rid:
+            continue
+        if rid in absent:
+            it["sync_status"] = "unsynced"
+            it.pop("record_id", None)
+            marked += 1
+
+    if marked:
+        try:
+            storage.upsert_items(db_path, targets)
+            storage.export_json(db_path, literature_json)
+        except Exception:
+            pass
+
+    return {
+        "checked": len(record_ids),
+        "missing_remote": len(absent),
+        "marked_unsynced": marked,
+        "forbidden": len(forbidden),
+    }
+
+
 def delete_extracted_data(
     literature_json: str,
     db_path: str,
@@ -1272,7 +1334,55 @@ def main() -> None:
             stats = sync_feishu(literature_json, db_path, str(root_dir), config_path, fields_path, [str(k) for k in keys])
             sys.stdout.write(json.dumps(stats, ensure_ascii=False))
         except Exception as e:
-            sys.stdout.write(json.dumps({"error": {"code": "SYNC_FEISHU_FAILED", "message": str(e)}}, ensure_ascii=False))
+            import traceback
+            trace = traceback.format_exc()
+            if isinstance(trace, str) and len(trace) > 8000:
+                trace = trace[:8000] + "\n...<truncated>"
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "error": {
+                            "code": "SYNC_FEISHU_FAILED",
+                            "message": str(e),
+                            "type": type(e).__name__,
+                            "trace": trace,
+                        }
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return
+
+    if cmd == "reconcile_feishu":
+        keys_arg = "[]"
+        if len(sys.argv) >= 3:
+            keys_arg = sys.argv[2]
+        if keys_arg == "-":
+            raw = (sys.stdin.read() or "[]").lstrip("\ufeff").strip()
+            keys = json.loads(raw or "[]")
+        else:
+            keys = json.loads(keys_arg or "[]")
+        try:
+            stats = reconcile_feishu(literature_json, db_path, str(root_dir), config_path, [str(k) for k in keys])
+            sys.stdout.write(json.dumps(stats, ensure_ascii=False))
+        except Exception as e:
+            import traceback
+            trace = traceback.format_exc()
+            if isinstance(trace, str) and len(trace) > 8000:
+                trace = trace[:8000] + "\n...<truncated>"
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "error": {
+                            "code": "RECONCILE_FEISHU_FAILED",
+                            "message": str(e),
+                            "type": type(e).__name__,
+                            "trace": trace,
+                        }
+                    },
+                    ensure_ascii=False,
+                )
+            )
         return
 
     if cmd == "delete_extracted_data":

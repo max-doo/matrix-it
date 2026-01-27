@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react'
 import type { BadgeProps } from 'antd'
-import { Badge, Tag } from 'antd'
+import { Badge, Tag, Typography } from 'antd'
 import type { ProColumns } from '@ant-design/pro-components'
 import { ProTable } from '@ant-design/pro-components'
 
@@ -21,6 +21,7 @@ export type LiteratureTableProps = {
   view: LiteratureTableView
   metaColumns: LiteratureTableColumnOption[]
   analysisColumns?: LiteratureTableColumnOption[]
+  highlightQuery?: string
   selectedRowKeys: React.Key[]
   onSelectedRowKeysChange: (keys: React.Key[]) => void
   onOpenDetail: (itemKey: string) => void
@@ -67,6 +68,8 @@ const truncateText = (text: string, maxLen: number) => {
   if (s.length <= maxLen) return s
   return s.slice(0, maxLen - 1) + '…'
 }
+
+const escapeRegExp = (input: string) => input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
  * 辅助函数：生成状态徽标
@@ -176,6 +179,7 @@ export function LiteratureTable({
   view,
   metaColumns,
   analysisColumns,
+  highlightQuery,
   selectedRowKeys,
   onSelectedRowKeysChange,
   onOpenDetail,
@@ -188,6 +192,43 @@ export function LiteratureTable({
   const fixedWidthCols = useMemo(() => new Set(['author', 'year', 'type', 'bib_type']), [])
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+  const highlightTokens = useMemo(() => {
+    const normalized = String(highlightQuery ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+    return normalized ? normalized.split(' ').filter(Boolean) : []
+  }, [highlightQuery])
+  const highlightRegExp = useMemo(() => {
+    if (highlightTokens.length === 0) return null
+    const pattern = highlightTokens.map(escapeRegExp).join('|')
+    if (!pattern) return null
+    return new RegExp(`(${pattern})`, 'ig')
+  }, [highlightTokens])
+  const highlightText = useCallback(
+    (text: string) => {
+      if (!highlightRegExp) return text
+      const raw = String(text ?? '')
+      if (!raw) return raw
+      const parts = raw.split(highlightRegExp)
+      if (parts.length <= 1) return raw
+      return parts.map((part, idx) =>
+        idx % 2 === 1 ? (
+          <Typography.Text key={idx} mark>
+            {part}
+          </Typography.Text>
+        ) : (
+          part
+        )
+      )
+    },
+    [highlightRegExp]
+  )
+  const highlightableAnalysisKeys = useMemo(() => {
+    if (view !== 'matrix') return new Set<string>()
+    const excluded = new Set(['key_word', 'type', 'bib_type'])
+    return new Set((analysisColumns ?? []).map((c) => c.key).filter((k) => !excluded.has(k)))
+  }, [analysisColumns, view])
 
   const sortStorageKey = `matrixit.ui.tableSort.${view}`
 
@@ -639,7 +680,7 @@ export function LiteratureTable({
                 : 'matrixit-title-link'
             }
           >
-            {record.title || '（无标题）'}
+            {highlightTokens.length > 0 ? highlightText(record.title || '（无标题）') : record.title || '（无标题）'}
           </button>
         ),
       }
@@ -681,10 +722,13 @@ export function LiteratureTable({
           sortDirections: ['ascend', 'descend', 'ascend'],
           render: (_, record) => {
             const v = (record as Record<string, unknown>)[colKey]
+            const shouldHighlight =
+              highlightTokens.length > 0 && (colKey === 'author' || (view === 'matrix' && highlightableAnalysisKeys.has(colKey)))
 
             // 特殊处理：作者（格式化 + 截断）
             if (colKey === 'author') {
-              return <span className="secondary-color">{formatAuthor(v, true)}</span>
+              const text = formatAuthor(v, true)
+              return <span className="secondary-color">{shouldHighlight ? highlightText(text) : text}</span>
             }
 
             // 特殊处理：文献类型（映射 + 配色标签）
@@ -737,10 +781,20 @@ export function LiteratureTable({
             if (v === null || v === undefined || v === '') {
               return <span className="secondary-color">-</span>
             }
-            if (Array.isArray(v)) return <span className="secondary-color">{v.filter(Boolean).join(', ') || '-'}</span>
-            if (typeof v === 'object') return <span className="secondary-color">{JSON.stringify(v)}</span>
-            if (colKey === 'citation') return <span className="secondary-color">{String(v).replace(/^\[\d+\]\s*/, '')}</span>
-            return <span className="secondary-color">{String(v)}</span>
+            if (Array.isArray(v)) {
+              const text = v.filter(Boolean).join(', ') || '-'
+              return <span className="secondary-color">{shouldHighlight ? highlightText(text) : text}</span>
+            }
+            if (typeof v === 'object') {
+              const text = JSON.stringify(v)
+              return <span className="secondary-color">{shouldHighlight ? highlightText(text) : text}</span>
+            }
+            if (colKey === 'citation') {
+              const text = String(v).replace(/^\[\d+\]\s*/, '')
+              return <span className="secondary-color">{shouldHighlight ? highlightText(text) : text}</span>
+            }
+            const text = String(v)
+            return <span className="secondary-color">{shouldHighlight ? highlightText(text) : text}</span>
           },
         } as ProColumns<LiteratureItem>
       }

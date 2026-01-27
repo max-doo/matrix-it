@@ -10,6 +10,7 @@ import {
   PlayCircleOutlined,
   SearchOutlined,
   StopOutlined,
+  SyncOutlined,
 } from '@ant-design/icons'
 import type { FilterMode } from '../../types'
 import type { FieldFilterState } from '../hooks/useFilterState'
@@ -63,10 +64,14 @@ type WorkbenchToolbarProps = {
   onDeleteRequest: () => void
 
   feishuSyncing: boolean
+  feishuReconciling: boolean
   feishuPendingCount: number
   feishuLastError: string | null
   feishuSyncEnabled: boolean
+  feishuReconcileDue: boolean
+  feishuLastReconcileAt: number | null
   onSyncRequest: () => void
+  onReconcileRequest: () => void
 
   filteredItemsCount: number
 }
@@ -109,29 +114,47 @@ export function WorkbenchToolbar({
   deletingExtracted,
   onDeleteRequest,
   feishuSyncing,
+  feishuReconciling,
   feishuPendingCount,
   feishuLastError,
   feishuSyncEnabled,
+  feishuReconcileDue,
+  feishuLastReconcileAt,
   onSyncRequest,
+  onReconcileRequest,
   filteredItemsCount,
 }: WorkbenchToolbarProps) {
   const searchHelpText = useMemo(() => {
-    return normalizedSearchQuery ? `匹配 ${filteredItemsCount} 条（标题/作者模糊）` : '支持模糊搜索：标题、作者'
-  }, [filteredItemsCount, normalizedSearchQuery])
+    const scope =
+      activeView === 'matrix' ? '标题、作者、分析字段（不含关键词/文献类型）' : '标题、作者'
+    return normalizedSearchQuery ? `匹配 ${filteredItemsCount} 条（${scope} 模糊）` : `支持模糊搜索：${scope}`
+  }, [activeView, filteredItemsCount, normalizedSearchQuery])
 
   const feishuIcon = useMemo(() => {
     if (feishuSyncing) return <LoadingOutlined spin />
+    if (feishuReconciling) return <LoadingOutlined spin />
     if (feishuLastError) return <ExclamationCircleOutlined />
     if (feishuPendingCount > 0) return <CloudUploadOutlined />
+    if (feishuReconcileDue) return <SyncOutlined />
     return <CheckCircleOutlined />
-  }, [feishuLastError, feishuPendingCount, feishuSyncing])
+  }, [feishuLastError, feishuPendingCount, feishuReconcileDue, feishuReconciling, feishuSyncing])
 
   const feishuTitle = useMemo(() => {
     if (feishuSyncing) return '正在同步到飞书…'
+    if (feishuReconciling) return '正在校验飞书同步状态…'
     if (feishuLastError) return `同步失败：${feishuLastError}（点击重试）`
     if (feishuPendingCount > 0) return `待同步 ${feishuPendingCount} 条（点击同步）`
+    if (feishuReconcileDue) return '云端状态未校验（点击更新）'
+    if (feishuLastReconcileAt) return '已同步（已校验）'
     return '已同步'
-  }, [feishuLastError, feishuPendingCount, feishuSyncing])
+  }, [feishuLastError, feishuLastReconcileAt, feishuPendingCount, feishuReconcileDue, feishuReconciling, feishuSyncing])
+
+  const handleFeishuAction = useMemo(() => {
+    if (feishuPendingCount > 0) return onSyncRequest
+    return onReconcileRequest
+  }, [feishuPendingCount, onReconcileRequest, onSyncRequest])
+
+  const feishuBusy = feishuSyncing || feishuReconciling
 
   return (
     <div className="flex items-center gap-3">
@@ -150,7 +173,7 @@ export function WorkbenchToolbar({
             <div data-tauri-drag-region="false" className="w-80">
               <div className="text-xs secondary-color mb-2">搜索当前集合</div>
               <Input
-                placeholder="搜索标题/作者"
+                placeholder={activeView === 'matrix' ? '搜索标题/作者/分析字段（不含关键词/文献类型）' : '搜索标题/作者'}
                 allowClear
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -233,8 +256,8 @@ export function WorkbenchToolbar({
             icon={feishuIcon}
             aria-label="同步到飞书"
             title={feishuTitle}
-            onClick={onSyncRequest}
-            disabled={!feishuSyncEnabled || feishuSyncing}
+            onClick={handleFeishuAction}
+            disabled={!feishuSyncEnabled || feishuBusy}
           />
         ) : null}
 

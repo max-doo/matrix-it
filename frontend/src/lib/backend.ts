@@ -211,6 +211,10 @@ export async function syncFeishu(itemKeys: string[]) {
   return await invoke('sync_feishu', { itemKeys })
 }
 
+export async function reconcileFeishu(itemKeys: string[]) {
+  return await invoke('reconcile_feishu', { itemKeys })
+}
+
 /**
  * 删除已提取的数据
  * 包括清除本地分析结果和飞书对应记录

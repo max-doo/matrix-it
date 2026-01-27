@@ -73,10 +73,13 @@ export function useFilteredItems(
     collectionItems: LiteratureItem[],
     filterMode: FilterMode,
     fieldFilter: FieldFilterState,
-    normalizedSearchQuery: string
+    normalizedSearchQuery: string,
+    activeView?: string,
+    matrixSearchAnalysisKeys?: string[]
 ) {
     return useMemo(() => {
         const normalizeText = (v: unknown) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+        const excludedSearchKeys = new Set(['key_word', 'type', 'bib_type'])
 
         // 1. 按处理状态筛选
         const byStatus =
@@ -172,9 +175,28 @@ export function useFilteredItems(
         return byFieldFilter.filter((it) => {
             const title = normalizeText(it.title)
             const author = normalizeText(it.author)
-            return title.includes(normalizedSearchQuery) || author.includes(normalizedSearchQuery)
+            if (title.includes(normalizedSearchQuery) || author.includes(normalizedSearchQuery)) return true
+
+            if (activeView !== 'matrix') return false
+            if (!Array.isArray(matrixSearchAnalysisKeys) || matrixSearchAnalysisKeys.length === 0) return false
+
+            for (const k of matrixSearchAnalysisKeys) {
+                const key = String(k || '').trim()
+                if (!key || excludedSearchKeys.has(key)) continue
+
+                const raw = (it as unknown as Record<string, unknown>)[key]
+                if (raw === null || raw === undefined || raw === '') continue
+
+                let text = ''
+                if (Array.isArray(raw)) text = raw.filter((x) => x !== null && x !== undefined).map((x) => String(x)).join(' ')
+                else if (typeof raw === 'object') text = JSON.stringify(raw)
+                else text = String(raw)
+
+                if (normalizeText(text).includes(normalizedSearchQuery)) return true
+            }
+            return false
         })
-    }, [collectionItems, filterMode, fieldFilter, normalizedSearchQuery])
+    }, [collectionItems, filterMode, fieldFilter, normalizedSearchQuery, activeView, matrixSearchAnalysisKeys])
 }
 
 /**

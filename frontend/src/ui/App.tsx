@@ -11,7 +11,7 @@ import {
 import zhCN from 'antd/locale/zh_CN'
 
 import type { AnalysisReport, LiteratureItem } from '../types'
-import { syncFeishu as syncFeishuRpc } from '../lib/backend'
+import { reconcileFeishu as reconcileFeishuRpc, syncFeishu as syncFeishuRpc } from '../lib/backend'
 import { AppSidebar } from './components/AppSidebar'
 import { LiteratureTable, type LiteratureTableView } from './components/LiteratureTable'
 import { TitleBar } from './components/TitleBar'
@@ -209,6 +209,12 @@ export default function App() {
   const [detailMode, setDetailMode] = useState<LiteratureDetailDrawerMode>(() => (readString(STORAGE_KEYS.ACTIVE_VIEW) ?? 'zotero') === 'matrix' ? 'matrix' : 'zotero')
   const [feishuSyncing, setFeishuSyncing] = useState(false)
   const [feishuSyncLastError, setFeishuSyncLastError] = useState<string | null>(null)
+  const [feishuReconciling, setFeishuReconciling] = useState(false)
+  const [feishuLastReconcileAt, setFeishuLastReconcileAt] = useState<number | null>(() => {
+    const raw = readString(STORAGE_KEYS.FEISHU_RECONCILE_AT)
+    const n = raw ? Number(raw) : NaN
+    return Number.isFinite(n) ? n : null
+  })
   const {
     metaColumnPanel,
     analysisColumnPanel,
@@ -312,7 +318,12 @@ export default function App() {
 
   const collectionItems = useCollectionItems(library, activeCollectionKey)
   const { filterYearOptions, filterTypeOptions, filterTagOptions, filterKeywordOptions, filterBibTypeOptions } = useFilterOptions(collectionItems)
-  const filteredItems = useFilteredItems(collectionItems, filterMode, fieldFilter, normalizedSearchQuery)
+  const matrixSearchAnalysisKeys = useMemo(() => {
+    if (activeView !== 'matrix') return []
+    const excluded = new Set(['key_word', 'type', 'bib_type'])
+    return Object.keys(analysisFieldDefs).filter((k) => !excluded.has(k))
+  }, [activeView, analysisFieldDefs])
+  const filteredItems = useFilteredItems(collectionItems, filterMode, fieldFilter, normalizedSearchQuery, activeView, matrixSearchAnalysisKeys)
   const feishuPendingCount = useMemo(() => {
     if (activeView !== 'matrix') return 0
     return filteredItems.filter((it) => it.processed_status === 'done' && it.sync_status !== 'synced').length
@@ -321,6 +332,12 @@ export default function App() {
     if (activeView !== 'matrix') return false
     return filteredItems.some((it) => it.processed_status === 'done')
   }, [activeView, filteredItems])
+  const feishuReconcileDue = useMemo(() => {
+    if (activeView !== 'matrix') return false
+    if (!feishuSyncEnabled) return false
+    if (!feishuLastReconcileAt) return true
+    return Date.now() - feishuLastReconcileAt > 10 * 60 * 1000
+  }, [activeView, feishuLastReconcileAt, feishuSyncEnabled])
   const { activeItem, canPrevDetail, canNextDetail, goPrevDetail, goNextDetail } = useDetailNavigation(
     library.items,
     filteredItems,
@@ -455,6 +472,65 @@ export default function App() {
       setFeishuSyncing(false)
     }
   }, [activeView, feishuSyncing, filteredItems, library.items, refreshLibrary, selectedRowKeys])
+
+  const handleReconcileFeishuRequest = useCallback(async () => {
+    if (activeView !== 'matrix') return
+    if (feishuReconciling) return
+    if (!feishuSyncEnabled) return
+
+    const selected = new Set(selectedRowKeys.map((k) => String(k)))
+    const selectedItems = library.items.filter((it) => selected.has(it.item_key))
+    const base = selectedItems.length > 0 ? selectedItems : filteredItems
+    const keys = base.filter((it) => it.processed_status === 'done').map((it) => it.item_key)
+    if (keys.length === 0) {
+      message.info('没有可校验条目')
+      return
+    }
+
+    setFeishuReconciling(true)
+    setFeishuSyncLastError(null)
+    const attemptTs = Date.now()
+    setFeishuLastReconcileAt(attemptTs)
+    writeString(STORAGE_KEYS.FEISHU_RECONCILE_AT, String(attemptTs))
+    try {
+      const res = (await reconcileFeishuRpc(keys)) as unknown as Record<string, unknown>
+      const err = res?.error as Record<string, unknown> | undefined
+      if (err && typeof err === 'object') {
+        const msg = String(err.message || err.code || '校验失败')
+        setFeishuSyncLastError(msg)
+        message.error(msg)
+        return
+      }
+
+      const marked = Number(res?.marked_unsynced ?? 0)
+      const missing = Number(res?.missing_remote ?? 0)
+      const checked = Number(res?.checked ?? 0)
+      if (marked > 0) {
+        message.warning(`已校验 ${checked} 条：云端缺失 ${missing} 条，已标记待同步 ${marked} 条`)
+      } else {
+        message.success(`已校验 ${checked} 条：同步状态正常`)
+      }
+      await refreshLibrary('auto')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '校验失败'
+      setFeishuSyncLastError(msg)
+      message.error(msg)
+    } finally {
+      setFeishuReconciling(false)
+    }
+  }, [activeView, feishuReconciling, feishuSyncEnabled, filteredItems, library.items, refreshLibrary, selectedRowKeys])
+
+  useEffect(() => {
+    if (mode !== 'workbench') return
+    if (activeView !== 'matrix') return
+    if (!feishuReconcileDue) return
+    if (feishuSyncing || feishuReconciling) return
+    if (refreshingLibrary) return
+    const t = window.setTimeout(() => {
+      void handleReconcileFeishuRequest()
+    }, 800)
+    return () => window.clearTimeout(t)
+  }, [activeView, feishuReconcileDue, feishuReconciling, feishuSyncing, handleReconcileFeishuRequest, mode, refreshingLibrary])
 
   const segmentedOptions: { label: string; value: string }[] = [
     { label: 'Zotero库', value: 'zotero' },
@@ -592,10 +668,14 @@ export default function App() {
                         deletingExtracted={deletingExtracted}
                         onDeleteRequest={handleDeleteRequest}
                         feishuSyncing={feishuSyncing}
+                        feishuReconciling={feishuReconciling}
                         feishuPendingCount={feishuPendingCount}
                         feishuLastError={feishuSyncLastError}
                         feishuSyncEnabled={feishuSyncEnabled}
+                        feishuReconcileDue={feishuReconcileDue}
+                        feishuLastReconcileAt={feishuLastReconcileAt}
                         onSyncRequest={handleSyncFeishuRequest}
+                        onReconcileRequest={handleReconcileFeishuRequest}
                         filteredItemsCount={filteredItems.length}
                       />
                     </div>
@@ -607,6 +687,7 @@ export default function App() {
                       view={activeView as LiteratureTableView}
                       metaColumns={tableMetaColumns}
                       analysisColumns={tableAnalysisColumns}
+                      highlightQuery={normalizedSearchQuery}
                       selectedRowKeys={selectedRowKeys}
                       onSelectedRowKeysChange={setSelectedRowKeys}
                       onOpenDetail={(key) => void requestOpenDetail(key)}

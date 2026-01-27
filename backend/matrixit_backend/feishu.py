@@ -19,6 +19,8 @@ import lark_oapi as lark
 from lark_oapi.api.bitable.v1 import (
     AppTableField,
     AppTableRecord,
+    BatchGetAppTableRecordRequest,
+    BatchGetAppTableRecordRequestBody,
     CreateAppTableFieldRequest,
     CreateAppTableRecordRequest,
     DeleteAppTableRecordRequest,
@@ -406,12 +408,18 @@ def upload_items(
         raise ValueError("飞书配置不完整")
 
     req_keys = [str(k).strip() for k in (keys or []) if str(k).strip()]
+    if not isinstance(base_dir, str):
+        base_dir = str(base_dir)
+    if config_path is not None and not isinstance(config_path, str):
+        config_path = str(config_path)
 
     fields_def: dict = {}
     if isinstance(fields_json, dict):
         fields_def = fields_json
     else:
-        fields_path = Path(str(fields_json))
+        if not isinstance(fields_json, (str, os.PathLike, Path)):
+            raise TypeError(f"fields_json must be a path string or dict, got {type(fields_json).__name__}")
+        fields_path = Path(fields_json)
         if not fields_path.is_absolute():
             fields_path = (Path(base_dir) / fields_path).resolve()
         with open(fields_path, "r", encoding="utf-8") as f:
@@ -516,6 +524,18 @@ def upload_items(
                     .build()
                 )
                 resp = client.bitable.v1.app_table_record.update(req)
+                if not resp.success() and getattr(resp, "code", None) == 2001254043:
+                    item.pop("record_id", None)
+                    item["sync_status"] = "unsynced"
+                    record_id = None
+                    req = (
+                        CreateAppTableRecordRequest.builder()
+                        .app_token(fc["app_token"])
+                        .table_id(fc["table_id"])
+                        .request_body(AppTableRecord.builder().fields(fields).build())
+                        .build()
+                    )
+                    resp = client.bitable.v1.app_table_record.create(req)
             else:
                 req = (
                     CreateAppTableRecordRequest.builder()
@@ -557,6 +577,48 @@ def upload_items(
                 pass
 
     return stats, items
+
+
+def batch_get_records(config_dict: dict, record_ids: List[str]) -> dict:
+    fc = get_feishu_config(config_dict)
+    if not all(k in fc for k in ["app_id", "app_secret", "app_token", "table_id"]):
+        raise ValueError("飞书配置不完整")
+    ids = [str(rid or "").strip() for rid in (record_ids or []) if str(rid or "").strip()]
+    if not ids:
+        return {"present": [], "absent": [], "forbidden": []}
+
+    client = create_client(fc["app_id"], fc["app_secret"])
+    present: List[str] = []
+    absent: List[str] = []
+    forbidden: List[str] = []
+
+    chunk_size = 200
+    for i in range(0, len(ids), chunk_size):
+        chunk = ids[i : i + chunk_size]
+        req = (
+            BatchGetAppTableRecordRequest.builder()
+            .app_token(fc["app_token"])
+            .table_id(fc["table_id"])
+            .request_body(BatchGetAppTableRecordRequestBody.builder().record_ids(chunk).build())
+            .build()
+        )
+        resp = client.bitable.v1.app_table_record.batch_get(req)
+        if not resp.success():
+            code = getattr(resp, "code", None)
+            msg = getattr(resp, "msg", None)
+            raise RuntimeError(f"batch_get failed: code={code} msg={msg}")
+        data = getattr(resp, "data", None)
+        if data and getattr(data, "records", None):
+            for r in data.records:
+                rid = getattr(r, "record_id", None)
+                if isinstance(rid, str) and rid.strip():
+                    present.append(rid.strip())
+        if data and getattr(data, "absent_record_ids", None):
+            absent.extend([str(x).strip() for x in data.absent_record_ids if str(x).strip()])
+        if data and getattr(data, "forbidden_record_ids", None):
+            forbidden.extend([str(x).strip() for x in data.forbidden_record_ids if str(x).strip()])
+
+    return {"present": present, "absent": absent, "forbidden": forbidden}
 
 
 def delete_records(config_dict: dict, record_ids: List[str]) -> dict:
