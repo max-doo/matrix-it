@@ -37,6 +37,13 @@ const { Sider, Content } = Layout
 type ConfirmApi = {
   confirmDelete: (opts: { total: number; onOk: () => void | Promise<void> }) => void
   confirmReanalyze: (opts: { total: number; onOk: () => void }) => void
+  confirmResyncFeishu: (opts: {
+    total: number
+    synced: number
+    unsynced: number
+    onResyncAll: () => void | Promise<void>
+    onSyncUnsynced: () => void | Promise<void>
+  }) => void
   confirmMixedAnalyze: (opts: {
     total: number
     done: number
@@ -83,6 +90,68 @@ function ConfirmController({
           okText: '确定',
           cancelText: '取消',
           onOk: () => onOk(),
+        })
+      },
+      confirmResyncFeishu: ({ total, synced, unsynced, onResyncAll, onSyncUnsynced }) => {
+        let inst: { destroy: () => void } | null = null
+        const onlySynced = unsynced <= 0
+        inst = modal.confirm({
+          title: '重新同步确认',
+          content: `已选 ${total} 条文献，其中已同步 ${synced} 条、未同步 ${unsynced} 条。`,
+          width: 420,
+          okText: `重新同步（${total}）`,
+          okType: onlySynced ? 'primary' : 'default',
+          okButtonProps: { size: 'small' },
+          cancelText: '取消',
+          cancelButtonProps: { size: 'small' },
+          onOk: () => {
+            void Promise.resolve()
+              .then(() => onResyncAll())
+              .catch((e) => {
+                const msg = e instanceof Error ? e.message : '同步失败'
+                message.error(msg)
+              })
+          },
+          footer: (_originNode, { OkBtn, CancelBtn }) => {
+            if (onlySynced) {
+              return (
+                <div className="flex items-center justify-end gap-2 flex-nowrap max-w-full overflow-x-auto">
+                  <div className="shrink-0">
+                    <CancelBtn />
+                  </div>
+                  <div className="shrink-0">
+                    <OkBtn />
+                  </div>
+                </div>
+              )
+            }
+            return (
+              <div className="flex items-center justify-end gap-2 flex-nowrap max-w-full overflow-x-auto">
+                <div className="shrink-0">
+                  <CancelBtn />
+                </div>
+                <div className="shrink-0">
+                  <OkBtn />
+                </div>
+                <Button
+                  type="primary"
+                  size="small"
+                  onClick={() => {
+                    inst?.destroy()
+                    void Promise.resolve()
+                      .then(() => onSyncUnsynced())
+                      .catch((e) => {
+                        const msg = e instanceof Error ? e.message : '同步失败'
+                        message.error(msg)
+                      })
+                  }}
+                  disabled={unsynced <= 0}
+                >
+                  仅同步未同步（{unsynced}）
+                </Button>
+              </div>
+            )
+          },
         })
       },
       confirmMixedAnalyze: ({ total, done, unprocessed, onAnalyzeAll, onAnalyzeUnprocessed }) => {
@@ -187,6 +256,8 @@ export default function App() {
   const { themeToken, activeSearchButtonStyle } = useAppTheme(normalizedSearchQuery)
   const [columnsPopoverOpen, setColumnsPopoverOpen] = useState(false)
   const [mode, setMode] = useState<'workbench' | 'settings'>('workbench')
+  const startupReconcileTriggeredRef = useRef(false)
+  const startupReconcileTimerRef = useRef<number | null>(null)
   const {
     rawConfig,
     setRawConfig,
@@ -333,12 +404,20 @@ export default function App() {
     if (activeView !== 'matrix') return false
     return filteredItems.some((it) => it.processed_status === 'done')
   }, [activeView, filteredItems])
+  const feishuGlobalSyncEnabled = useMemo(() => {
+    return library.items.some((it) => it.processed_status === 'done')
+  }, [library.items])
   const feishuReconcileDue = useMemo(() => {
     if (activeView !== 'matrix') return false
     if (!feishuSyncEnabled) return false
     if (!feishuLastReconcileAt) return true
     return Date.now() - feishuLastReconcileAt > 10 * 60 * 1000
   }, [activeView, feishuLastReconcileAt, feishuSyncEnabled])
+  const feishuGlobalReconcileDue = useMemo(() => {
+    if (!feishuGlobalSyncEnabled) return false
+    if (!feishuLastReconcileAt) return true
+    return Date.now() - feishuLastReconcileAt > 10 * 60 * 1000
+  }, [feishuGlobalSyncEnabled, feishuLastReconcileAt])
   const llmConfigured = useMemo(() => {
     const llm = rawConfig.llm
     if (!llm || typeof llm !== 'object') return false
@@ -454,48 +533,64 @@ export default function App() {
     const selected = new Set(selectedRowKeys.map((k) => String(k)))
     const selectedItems = library.items.filter((it) => selected.has(it.item_key))
     const base = selectedItems.length > 0 ? selectedItems : filteredItems
-    const keys = base
-      .filter((it) => it.processed_status === 'done' && it.sync_status !== 'synced')
-      .map((it) => it.item_key)
+    const doneBase = base.filter((it) => it.processed_status === 'done')
+    const unsyncedKeys = doneBase.filter((it) => it.sync_status !== 'synced').map((it) => it.item_key)
+    const syncedKeys = selectedItems.length > 0 ? doneBase.filter((it) => it.sync_status === 'synced').map((it) => it.item_key) : []
+    const keys = selectedItems.length > 0 ? Array.from(new Set([...unsyncedKeys, ...syncedKeys])) : unsyncedKeys
 
     if (keys.length === 0) {
-      message.info('没有待同步条目')
+      message.info(selectedItems.length > 0 ? '选中的条目没有可同步内容' : '没有待同步条目')
       return
     }
 
-    setFeishuSyncing(true)
-    setFeishuSyncLastError(null)
-    setLibrary((prev) => ({
-      ...prev,
-      items: prev.items.map((it) => (keys.includes(it.item_key) ? { ...it, sync_status: 'syncing' } : it)),
-    }))
-    try {
-      const res = (await syncFeishuRpc(keys)) as unknown as Record<string, unknown>
-      const err = res?.error as Record<string, unknown> | undefined
-      if (err && typeof err === 'object') {
-        const msg = String(err.message || err.code || '同步失败')
+    const runSync = async (nextKeys: string[], options?: { resyncSynced?: boolean; skipAttachmentUpload?: boolean }) => {
+      setFeishuSyncing(true)
+      setFeishuSyncLastError(null)
+      setLibrary((prev) => ({
+        ...prev,
+        items: prev.items.map((it) => (nextKeys.includes(it.item_key) ? { ...it, sync_status: 'syncing' } : it)),
+      }))
+      try {
+        const res = (await syncFeishuRpc(nextKeys, options)) as unknown as Record<string, unknown>
+        const err = res?.error as Record<string, unknown> | undefined
+        if (err && typeof err === 'object') {
+          const msg = String(err.message || err.code || '同步失败')
+          setFeishuSyncLastError(msg)
+          message.error(msg)
+          return
+        }
+
+        const uploaded = Number(res?.uploaded ?? 0)
+        const failed = Number(res?.failed ?? 0)
+        if (failed > 0) {
+          const msg = `同步完成：成功 ${uploaded} 条，失败 ${failed} 条`
+          setFeishuSyncLastError(`失败 ${failed} 条`)
+          message.warning(msg)
+        } else {
+          message.success(`已同步 ${uploaded} 条`)
+        }
+        await refreshLibrary('auto')
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : '同步失败'
         setFeishuSyncLastError(msg)
         message.error(msg)
-        return
+      } finally {
+        setFeishuSyncing(false)
       }
-
-      const uploaded = Number(res?.uploaded ?? 0)
-      const failed = Number(res?.failed ?? 0)
-      if (failed > 0) {
-        const msg = `同步完成：成功 ${uploaded} 条，失败 ${failed} 条`
-        setFeishuSyncLastError(`失败 ${failed} 条`)
-        message.warning(msg)
-      } else {
-        message.success(`已同步 ${uploaded} 条`)
-      }
-      await refreshLibrary('auto')
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : '同步失败'
-      setFeishuSyncLastError(msg)
-      message.error(msg)
-    } finally {
-      setFeishuSyncing(false)
     }
+
+    if (selectedItems.length > 0 && syncedKeys.length > 0) {
+      confirmApiRef.current?.confirmResyncFeishu({
+        total: doneBase.length,
+        synced: syncedKeys.length,
+        unsynced: unsyncedKeys.length,
+        onResyncAll: () => runSync(keys, { resyncSynced: true, skipAttachmentUpload: true }),
+        onSyncUnsynced: () => runSync(unsyncedKeys),
+      })
+      return
+    }
+
+    await runSync(keys)
   }, [activeView, feishuSyncing, filteredItems, library.items, refreshLibrary, selectedRowKeys])
 
   const handleReconcileFeishuRequest = useCallback(async () => {
@@ -545,17 +640,80 @@ export default function App() {
     }
   }, [activeView, feishuReconciling, feishuSyncEnabled, filteredItems, library.items, refreshLibrary, selectedRowKeys])
 
+  const handleAutoReconcileFeishuRequest = useCallback(async () => {
+    if (feishuReconciling) return
+    if (!feishuApiConfigured) return
+    if (!feishuGlobalSyncEnabled) return
+
+    const keys = library.items.filter((it) => it.processed_status === 'done').map((it) => it.item_key)
+    if (keys.length === 0) return
+
+    setFeishuReconciling(true)
+    setFeishuSyncLastError(null)
+    const attemptTs = Date.now()
+    setFeishuLastReconcileAt(attemptTs)
+    writeString(STORAGE_KEYS.FEISHU_RECONCILE_AT, String(attemptTs))
+    try {
+      const res = (await reconcileFeishuRpc(keys)) as unknown as Record<string, unknown>
+      const err = res?.error as Record<string, unknown> | undefined
+      if (err && typeof err === 'object') {
+        const msg = String(err.message || err.code || '校验失败')
+        setFeishuSyncLastError(msg)
+        message.error(msg)
+        return
+      }
+
+      const marked = Number(res?.marked_unsynced ?? 0)
+      const missing = Number(res?.missing_remote ?? 0)
+      const checked = Number(res?.checked ?? 0)
+      if (marked > 0) {
+        message.warning(`已校验 ${checked} 条：云端缺失 ${missing} 条，已标记待同步 ${marked} 条`)
+      } else {
+        message.success(`已校验 ${checked} 条：同步状态正常`)
+      }
+      await refreshLibrary('auto')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '校验失败'
+      setFeishuSyncLastError(msg)
+      message.error(msg)
+    } finally {
+      setFeishuReconciling(false)
+    }
+  }, [feishuApiConfigured, feishuGlobalSyncEnabled, feishuReconciling, library.items, refreshLibrary])
+
+  useEffect(() => {
+    if (startupReconcileTriggeredRef.current) return
+    if (mode !== 'workbench') return
+    if (!feishuApiConfigured) return
+    if (!feishuGlobalSyncEnabled) return
+    if (feishuSyncing || feishuReconciling) return
+    if (refreshingLibrary) return
+    if (startupReconcileTimerRef.current) return
+    startupReconcileTimerRef.current = window.setTimeout(() => {
+      startupReconcileTimerRef.current = null
+      startupReconcileTriggeredRef.current = true
+      void handleAutoReconcileFeishuRequest()
+    }, 200)
+    return () => {
+      if (startupReconcileTimerRef.current) {
+        window.clearTimeout(startupReconcileTimerRef.current)
+        startupReconcileTimerRef.current = null
+      }
+    }
+  }, [feishuApiConfigured, feishuGlobalSyncEnabled, feishuReconciling, feishuSyncing, handleAutoReconcileFeishuRequest, mode, refreshingLibrary])
+
   useEffect(() => {
     if (mode !== 'workbench') return
-    if (activeView !== 'matrix') return
-    if (!feishuReconcileDue) return
+    if (startupReconcileTriggeredRef.current) return
+    if (startupReconcileTimerRef.current) return
+    if (!feishuGlobalReconcileDue) return
     if (feishuSyncing || feishuReconciling) return
     if (refreshingLibrary) return
     const t = window.setTimeout(() => {
-      void handleReconcileFeishuRequest()
+      void handleAutoReconcileFeishuRequest()
     }, 800)
     return () => window.clearTimeout(t)
-  }, [activeView, feishuReconcileDue, feishuReconciling, feishuSyncing, handleReconcileFeishuRequest, mode, refreshingLibrary])
+  }, [feishuGlobalReconcileDue, feishuReconciling, feishuSyncing, handleAutoReconcileFeishuRequest, mode, refreshingLibrary])
 
   const segmentedOptions: { label: string; value: string }[] = [
     { label: 'Zotero库', value: 'zotero' },

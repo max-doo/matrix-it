@@ -50,6 +50,9 @@ TYPE_MAPPING = {
     "file": FIELD_TYPE_ATTACHMENT,
 }
 
+FEISHU_META_DEFAULT_ORDER = ["title", "author", "year", "type", "publications", "abstract", "tags", "collections", "url", "doi"]
+FEISHU_META_FIXED_KEYS = {"title", "author", "year", "publications"}
+
 
 def parse_bitable_url(url: str) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -462,6 +465,7 @@ def upload_items(
     skip_processed: bool,
     base_dir: str,
     config_path: Optional[str] = None,
+    options: Optional[dict] = None,
 ) -> Tuple[dict, List[dict]]:
     """
     批量同步条目到飞书多维表。
@@ -497,6 +501,26 @@ def upload_items(
     if config_path is not None and not isinstance(config_path, str):
         config_path = str(config_path)
 
+    opt: dict = options if isinstance(options, dict) else {}
+
+    def _opt_bool(*names: str) -> bool:
+        for n in names:
+            v = opt.get(n)
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, (int, float)):
+                return bool(v)
+            if isinstance(v, str):
+                s = v.strip().lower()
+                if s in ("1", "true", "yes", "y", "on"):
+                    return True
+                if s in ("0", "false", "no", "n", "off"):
+                    return False
+        return False
+
+    resync_synced = _opt_bool("resync_synced", "resyncSynced")
+    skip_attachment_upload = _opt_bool("skip_attachment_upload", "skipAttachmentUpload")
+
     fields_def: dict = {}
     if isinstance(fields_json, dict):
         fields_def = fields_json
@@ -509,22 +533,88 @@ def upload_items(
         with open(fields_path, "r", encoding="utf-8") as f:
             fields_def = json.load(f)
 
+    def _unique_keep_order(seq: List[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for x in seq:
+            s = str(x or "").strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            out.append(s)
+        return out
+
+    meta_sync_raw = fc.get("meta_sync")
+    if not isinstance(meta_sync_raw, list):
+        meta_sync_raw = fc.get("metaSync") if isinstance(fc.get("metaSync"), list) else None
+    enabled_meta: set = set()
+    if isinstance(meta_sync_raw, list):
+        enabled_meta = set([str(x).strip() for x in meta_sync_raw if str(x).strip()])
+    else:
+        enabled_meta = set([k for k in FEISHU_META_DEFAULT_ORDER if k != "doi"])
+
+    def _should_sync_meta_key(k: str) -> bool:
+        if k in FEISHU_META_FIXED_KEYS:
+            return True
+        return k in enabled_meta
+
+    ui_cfg = config_dict.get("ui", {}) if isinstance(config_dict.get("ui", {}), dict) else {}
+    tc = ui_cfg.get("table_columns", {}) if isinstance(ui_cfg.get("table_columns", {}), dict) else {}
+    matrix = tc.get("matrix", {}) if isinstance(tc.get("matrix", {}), dict) else {}
+    analysis_ui = matrix.get("analysis", {}) if isinstance(matrix.get("analysis", {}), dict) else {}
+    analysis_order_raw = analysis_ui.get("order")
+    analysis_order = _unique_keep_order(analysis_order_raw if isinstance(analysis_order_raw, list) else [])
+
     mapping: Dict[str, str] = {}
     used_names: Dict[str, str] = {}
-    for section in ["meta_fields", "analysis_fields", "attachment_fields"]:
-        defs = fields_def.get(section, {})
-        if not isinstance(defs, dict):
+
+    def _add_mapping(section: str, key: str, v: dict) -> None:
+        name = str(v.get("name") or "").strip()
+        if not name:
+            raise ValueError(f"字段缺少 name: {section}.{key}")
+        if name in used_names and used_names[name] != str(key):
+            raise ValueError(f"字段 name 重复: {name} ({used_names[name]} / {key})")
+        used_names[name] = str(key)
+        mapping[str(key)] = name
+
+    meta_defs = fields_def.get("meta_fields", {}) if isinstance(fields_def.get("meta_fields", {}), dict) else {}
+    analysis_defs = fields_def.get("analysis_fields", {}) if isinstance(fields_def.get("analysis_fields", {}), dict) else {}
+    attachment_defs = fields_def.get("attachment_fields", {}) if isinstance(fields_def.get("attachment_fields", {}), dict) else {}
+    attachment_sync_raw = fc.get("attachment_sync")
+    if attachment_sync_raw is None:
+        attachment_sync_raw = fc.get("attachmentSync")
+    attachment_enabled = True
+    if isinstance(attachment_sync_raw, bool):
+        attachment_enabled = attachment_sync_raw
+    elif isinstance(attachment_sync_raw, (int, float)):
+        attachment_enabled = bool(attachment_sync_raw)
+    elif isinstance(attachment_sync_raw, str):
+        s = attachment_sync_raw.strip().lower()
+        if s in ("0", "false", "no", "n", "off"):
+            attachment_enabled = False
+
+    meta_keys_ordered = _unique_keep_order(FEISHU_META_DEFAULT_ORDER + list(meta_defs.keys()))
+    for k in meta_keys_ordered:
+        if k not in meta_defs:
             continue
-        for k, v in defs.items():
-            if not isinstance(v, dict):
-                continue
-            name = str(v.get("name") or "").strip()
-            if not name:
-                raise ValueError(f"字段缺少 name: {section}.{k}")
-            if name in used_names and used_names[name] != str(k):
-                raise ValueError(f"字段 name 重复: {name} ({used_names[name]} / {k})")
-            used_names[name] = str(k)
-            mapping[str(k)] = name
+        if not _should_sync_meta_key(k):
+            continue
+        v = meta_defs.get(k)
+        if isinstance(v, dict):
+            _add_mapping("meta_fields", k, v)
+
+    analysis_keys_ordered = _unique_keep_order(analysis_order + list(analysis_defs.keys()))
+    for k in analysis_keys_ordered:
+        if k not in analysis_defs:
+            continue
+        v = analysis_defs.get(k)
+        if isinstance(v, dict):
+            _add_mapping("analysis_fields", k, v)
+
+    if attachment_enabled:
+        for k, v in attachment_defs.items():
+            if isinstance(k, str) and isinstance(v, dict):
+                _add_mapping("attachment_fields", k, v)
 
     schema_fields = {}
     fc_schema = fc.get("schema", {}) if isinstance(fc.get("schema", {}), dict) else {}
@@ -614,6 +704,7 @@ def upload_items(
                 sys.stderr.flush()
             except Exception:
                 pass
+            is_resync_item = bool(resync_synced and item.get("sync_status") == "synced")
             ftoken = None
             used_cached_token = False
             pending_file_token: Optional[str] = None
@@ -632,6 +723,8 @@ def upload_items(
                         ftoken = str(cached_token)
                         stats["pdf_skipped"] += 1
                         used_cached_token = True
+                    elif is_resync_item and skip_attachment_upload:
+                        stats["pdf_skipped"] += 1
                     else:
                         try:
                             ftoken = upload_file(client, pdf_path, fc["app_token"])
@@ -673,12 +766,18 @@ def upload_items(
             record_id = item.get("record_id")
             op = "update" if record_id else "create"
             if record_id:
+                fields_for_update: Dict[str, object] = fields
+                if is_resync_item and skip_attachment_upload and "attachment" in mapping:
+                    attachment_field_name = str(mapping.get("attachment") or "").strip()
+                    if attachment_field_name:
+                        fields_for_update = dict(fields)
+                        fields_for_update.pop(attachment_field_name, None)
                 req = (
                     UpdateAppTableRecordRequest.builder()
                     .app_token(fc["app_token"])
                     .table_id(fc["table_id"])
                     .record_id(record_id)
-                    .request_body(AppTableRecord.builder().fields(fields).build())
+                    .request_body(AppTableRecord.builder().fields(fields_for_update).build())
                     .build()
                 )
                 resp = client.bitable.v1.app_table_record.update(req)

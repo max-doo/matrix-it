@@ -157,9 +157,10 @@ export function WorkbenchToolbar({
   }, [feishuLastError, feishuLastReconcileAt, feishuPendingCount, feishuReconcileDue, feishuReconciling, feishuSyncing])
 
   const handleFeishuAction = useMemo(() => {
+    if (selectedCount > 0) return onSyncRequest
     if (feishuPendingCount > 0) return onSyncRequest
     return onReconcileRequest
-  }, [feishuPendingCount, onReconcileRequest, onSyncRequest])
+  }, [feishuPendingCount, onReconcileRequest, onSyncRequest, selectedCount])
 
   const feishuBusy = feishuSyncing || feishuReconciling
 
@@ -261,6 +262,7 @@ export function WorkbenchToolbar({
         {activeView === 'matrix' ? (
           <Button
             key="sync_feishu"
+            type={selectedCount > 0 ? 'primary' : 'default'}
             icon={feishuIcon}
             aria-label="同步到飞书"
             title={feishuTitle}

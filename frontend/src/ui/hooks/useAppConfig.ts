@@ -64,11 +64,18 @@ export function useAppConfig(mode: 'workbench' | 'settings') {
     }, [rawConfig])
 
     const buildNextFields = useCallback((rows: AnalysisFieldRow[]) => {
+        const normalizeFieldType = (keyRaw: unknown) => {
+            const k = String(keyRaw ?? '').trim()
+            if (k === 'bib_type') return 'select'
+            if (k === 'key_word') return 'multi_select'
+            return 'string'
+        }
+
         const deduped = rows
             .map((r) => ({
                 key: String(r.key ?? '').trim(),
                 description: String(r.description ?? '').trim(),
-                type: String(r.type ?? 'string').trim(),
+                type: normalizeFieldType(r.key),
                 rule: String(r.rule ?? '').trim(),
                 name: String(r.name ?? '').trim(),
             }))
@@ -86,7 +93,7 @@ export function useAppConfig(mode: 'workbench' | 'settings') {
         for (const r of deduped) {
             nextAnalysis[r.key] = {
                 description: r.description,
-                type: r.type || 'string',
+                type: r.type,
                 rule: r.rule || undefined,
                 name: r.name || undefined,
             }
@@ -140,7 +147,7 @@ export function useAppConfig(mode: 'workbench' | 'settings') {
                         const row: AnalysisFieldRow = {
                             key: k,
                             description: typeof obj.description === 'string' ? obj.description : '',
-                            type: typeof obj.type === 'string' ? obj.type : 'string',
+                            type: k === 'bib_type' ? 'select' : k === 'key_word' ? 'multi_select' : 'string',
                             rule: typeof obj.rule === 'string' ? obj.rule : '',
                             name:
                                 typeof obj.name === 'string'
@@ -182,6 +189,28 @@ export function useAppConfig(mode: 'workbench' | 'settings') {
             const nextConfig = buildNextConfig(partial)
             const nextFields = buildNextFields(rows)
             nextConfig.fields = nextFields
+
+            const allowedJsonKeys = new Set<string>(['attachment'])
+            for (const section of ['meta_fields', 'analysis_fields', 'attachment_fields'] as const) {
+                const defs = (nextFields as Record<string, unknown>)[section]
+                if (defs && typeof defs === 'object') {
+                    for (const k of Object.keys(defs as Record<string, unknown>)) {
+                        const kk = String(k || '').trim()
+                        if (kk) allowedJsonKeys.add(kk)
+                    }
+                }
+            }
+            const feishu = (nextConfig.feishu as Record<string, unknown>) ?? {}
+            const schema = (feishu.schema as Record<string, unknown>) ?? {}
+            const schemaFields = schema.fields
+            if (schemaFields && typeof schemaFields === 'object' && !Array.isArray(schemaFields)) {
+                const nextSchemaFields: Record<string, unknown> = {}
+                for (const [k, v] of Object.entries(schemaFields as Record<string, unknown>)) {
+                    if (allowedJsonKeys.has(String(k || '').trim())) nextSchemaFields[k] = v
+                }
+                nextConfig.feishu = { ...feishu, schema: { ...schema, fields: nextSchemaFields } }
+            }
+
             const nextOrder = buildNextAnalysisOrder(rows)
             const ui = (nextConfig.ui as Record<string, unknown>) ?? {}
             const tableColumns = (ui.table_columns as Record<string, unknown>) ?? {}

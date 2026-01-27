@@ -207,8 +207,13 @@ export async function stopAnalysis(): Promise<{ stopped: boolean; cancelled_coun
  * 同步到飞书（返回值为后端响应的透传）。
  * 注意：失败兜底会返回全 0，UI 无法区分“确实为 0”还是“调用失败兜底为 0”。
  */
-export async function syncFeishu(itemKeys: string[]) {
-  return await invoke('sync_feishu', { itemKeys })
+export type SyncFeishuOptions = {
+  resyncSynced?: boolean
+  skipAttachmentUpload?: boolean
+}
+
+export async function syncFeishu(itemKeys: string[], options?: SyncFeishuOptions) {
+  return await invoke('sync_feishu', { itemKeys, options })
 }
 
 export async function reconcileFeishu(itemKeys: string[]) {
@@ -224,6 +229,15 @@ export async function deleteExtractedData(itemKeys: string[]) {
     return await invoke('delete_extracted_data', { itemKeys })
   } catch {
     return { cleared: 0, missing: itemKeys.length, analysis_fields: 0, feishu: { deleted: 0, skipped: 0, failed: itemKeys.length } }
+  }
+}
+
+export async function purgeItemField(fieldKey: string): Promise<{ scanned: number; purged: number }> {
+  try {
+    const res = await invoke<{ scanned: number; purged: number }>('purge_item_field', { fieldKey })
+    return { scanned: Number(res?.scanned ?? 0), purged: Number(res?.purged ?? 0) }
+  } catch {
+    return { scanned: 0, purged: 0 }
   }
 }
 

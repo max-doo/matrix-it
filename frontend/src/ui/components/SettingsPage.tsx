@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import {
   Button,
+  Checkbox,
   Divider,
   Form,
   Input,
@@ -27,9 +28,10 @@ import {
 } from '@ant-design/icons'
 
 import { DEFAULT_ANALYSIS_FIELDS } from '../defaults/analysisFields'
+import { DEFAULT_META_COLUMN_ORDER } from '../defaults/metaColumnOrder'
 import { App, Space, Segmented, Collapse, Tooltip, message } from 'antd'
 import { QuestionCircleOutlined, ThunderboltOutlined, EditOutlined, ApiOutlined, CloudServerOutlined, LinkOutlined } from '@ant-design/icons'
-import { listModels, openExternal } from '../../lib/backend'
+import { listModels, openExternal, purgeItemField } from '../../lib/backend'
 
 const PROVIDERS = [
   { label: '自定义 (Custom)', value: 'custom', baseUrl: '' },
@@ -383,6 +385,41 @@ export function SettingsPage({
   onAutoSave: () => void
 }) {
   const { modal, message: messageApi } = App.useApp()
+  const metaDefsWatched = Form.useWatch(['fields', 'meta_fields'], configForm) as Record<string, any> | undefined
+  const attachmentDefsWatched = Form.useWatch(['fields', 'attachment_fields'], configForm) as Record<string, any> | undefined
+  const metaDefs = useMemo(() => {
+    const v = metaDefsWatched ?? (configForm.getFieldValue(['fields', 'meta_fields']) as unknown)
+    return v && typeof v === 'object' ? (v as Record<string, any>) : {}
+  }, [configForm, metaDefsWatched])
+  const attachmentDefs = useMemo(() => {
+    const v = attachmentDefsWatched ?? (configForm.getFieldValue(['fields', 'attachment_fields']) as unknown)
+    return v && typeof v === 'object' ? (v as Record<string, any>) : {}
+  }, [attachmentDefsWatched, configForm])
+  const feishuMetaSyncOptions = useMemo(() => {
+    const fixed = new Set(['title', 'author', 'year', 'publications'])
+    const ordered = [...DEFAULT_META_COLUMN_ORDER, ...Object.keys(metaDefs).filter((k) => !DEFAULT_META_COLUMN_ORDER.includes(k))]
+    const keys = ordered.filter((k) => !fixed.has(k))
+    const defaultCn: Record<string, string> = {
+      title: '标题',
+      author: '作者',
+      year: '年份',
+      type: '类型',
+      publications: '出版物',
+      abstract: '摘要',
+      tags: '标签',
+      collections: '集合',
+      url: 'URL',
+      doi: 'DOI',
+    }
+    return keys.map((k) => ({
+      label: String((metaDefs as any)?.[k]?.name || '').trim() || defaultCn[k] || k,
+      value: k,
+    }))
+  }, [metaDefs])
+  const attachmentLabel = useMemo(() => {
+    const v = attachmentDefs.attachment as Record<string, unknown> | undefined
+    return String(v?.name ?? '').trim() || '附件'
+  }, [attachmentDefs])
   const scrollRootRef = useRef<HTMLDivElement | null>(null)
   const zoteroRef = useRef<HTMLDivElement | null>(null)
   const llmRef = useRef<HTMLDivElement | null>(null)
@@ -391,17 +428,10 @@ export function SettingsPage({
   const analysisListRef = useRef<HTMLDivElement | null>(null)
   const dragStateRef = useRef<{ active: boolean; fromIndex: number }>({ active: false, fromIndex: -1 })
   const [expandedFieldKey, setExpandedFieldKey] = useState<number | null>(null)
+  const initialAnalysisFieldKeysRef = useRef<Set<string> | null>(null)
+  const [, forceRender] = useState(0)
 
   const fixedAnalysisFieldKeys = useMemo(() => new Set(['tldr', 'key_word', 'bib_type']), [])
-
-  const typeOptions = useMemo(
-    () => [
-      { value: 'string', label: '文本' },
-      { value: 'select', label: '单选' },
-      { value: 'multi_select', label: '多选' },
-    ],
-    []
-  )
   const modeOptions = useMemo(() => [{ value: 'A', label: '客观提取' }, { value: 'B', label: '专家批判' }], [])
 
   const getModeLabel = useCallback(
@@ -527,6 +557,23 @@ export function SettingsPage({
     for (const t of targets) observer.observe(t)
     return () => observer.disconnect()
   }, [activeSection, onActiveSectionChange])
+
+  useEffect(() => {
+    if (loading) {
+      initialAnalysisFieldKeysRef.current = null
+      forceRender((v) => v + 1)
+      return
+    }
+    if (initialAnalysisFieldKeysRef.current) return
+    const rows = fieldsForm.getFieldValue('analysis_fields') as Array<Record<string, unknown> | undefined> | undefined
+    const next = new Set<string>()
+    for (const r of rows ?? []) {
+      const k = String(r?.key ?? '').trim()
+      if (k) next.add(k)
+    }
+    initialAnalysisFieldKeysRef.current = next
+    forceRender((v) => v + 1)
+  }, [fieldsForm, loading])
 
   return (
     <div className="flex-1 min-h-0 bg-white rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 overflow-hidden flex flex-col relative">
@@ -667,19 +714,43 @@ export function SettingsPage({
                       />
                     </Form.Item>
                   </div>
+
+                  <Divider className="!my-4" />
+
+                  <Typography.Title level={5} className="!mb-2">
+                    同步元数据字段
+                  </Typography.Title>
+                  <Typography.Paragraph type="secondary" className="!mt-0">
+                    标题、作者、年份、出版物固定上传；其他字段可勾选是否同步（默认全部勾选，DOI 默认不勾选）。
+                  </Typography.Paragraph>
+
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <Form.Item
+                      name={['feishu', 'attachment_sync']}
+                      valuePropName="checked"
+                      initialValue={true}
+                      className="!mb-0"
+                    >
+                      <Checkbox>{attachmentLabel}</Checkbox>
+                    </Form.Item>
+
+                    <Form.Item
+                      name={['feishu', 'meta_sync']}
+                      initialValue={DEFAULT_META_COLUMN_ORDER.filter((k) => !['title', 'author', 'year', 'publications', 'doi'].includes(k))}
+                      className="!mb-0"
+                    >
+                      <Checkbox.Group
+                        className="flex flex-wrap items-center gap-x-4 gap-y-2"
+                        options={feishuMetaSyncOptions}
+                      />
+                    </Form.Item>
+                  </div>
                 </div>
               </Form>
 
               <Divider className="!my-8" />
 
               <div ref={fieldsRef} data-section="fields" id="settings-fields" className="scroll-mt-6">
-                <Typography.Title level={5} className="!mb-2">
-                  字段设置
-                </Typography.Title>
-                <Typography.Paragraph type="secondary" className="!mt-0">
-                  Zotero 库仅展示元数据字段；文献矩阵展示元数据字段与分析字段。
-                </Typography.Paragraph>
-                <Divider className="!my-3" />
 
                 <Typography.Title level={5} className="!mb-2">
                   分析字段
@@ -730,6 +801,7 @@ export function SettingsPage({
                                 const modeLabel = getModeLabel(rule)
                                 const ruleText = truncate(desc || '未填写', 46)
                                 const isFixed = fixedAnalysisFieldKeys.has(k)
+                                const isExistingKey = initialAnalysisFieldKeysRef.current?.has(k) ?? false
 
                                 return (
                                   <div
@@ -776,15 +848,38 @@ export function SettingsPage({
                                           aria-label="删除字段"
                                           onClick={(e) => {
                                             e.stopPropagation()
+                                            const targetKey = k
+                                            let shouldPurge = false
                                             void modal.confirm({
                                               title: '删除字段确认',
-                                              content: `确认删除「${title}」？`,
+                                              content: (
+                                                <div className="flex flex-col gap-2">
+                                                  <div>确认删除「{title}」？</div>
+                                                  <Typography.Text type="secondary">
+                                                    默认仅删除字段定义（历史数据保留，可通过重新创建同名字段找回）。
+                                                  </Typography.Text>
+                                                  <Checkbox
+                                                    onChange={(ev) => {
+                                                      shouldPurge = ev.target.checked
+                                                    }}
+                                                  >
+                                                    同时清理历史数据（不可恢复）
+                                                  </Checkbox>
+                                                </div>
+                                              ),
                                               okText: '删除',
                                               okButtonProps: { danger: true },
                                               cancelText: '取消',
-                                              onOk: () => {
+                                              onOk: async () => {
+                                                if (shouldPurge && targetKey) {
+                                                  const res = await purgeItemField(targetKey)
+                                                  if (res.purged > 0) {
+                                                    messageApi.success(`已清理 ${res.purged} 条记录中的「${targetKey}」字段`)
+                                                  }
+                                                }
                                                 if (expandedFieldKey === field.key) setExpandedFieldKey(null)
                                                 remove(field.name)
+                                                onAutoSave()
                                               },
                                             })
                                           }}
@@ -797,7 +892,7 @@ export function SettingsPage({
                                     {open ? (
                                       <div className="px-4 pb-4">
                                         <Divider className="!my-3" />
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                           <Form.Item label="中文名称" name={[field.name, 'name']}>
                                             <Input disabled={isFixed} placeholder="TLDR" autoComplete="off" onClick={(e) => e.stopPropagation()} />
                                           </Form.Item>
@@ -823,10 +918,7 @@ export function SettingsPage({
                                               },
                                             ]}
                                           >
-                                            <Input disabled={isFixed} placeholder="tldr" autoComplete="off" onClick={(e) => e.stopPropagation()} />
-                                          </Form.Item>
-                                          <Form.Item label="类型" name={[field.name, 'type']}>
-                                            <Select disabled={isFixed} options={typeOptions} onClick={(e) => e.stopPropagation()} />
+                                            <Input disabled={isFixed || isExistingKey} placeholder="tldr" autoComplete="off" onClick={(e) => e.stopPropagation()} />
                                           </Form.Item>
                                           <Form.Item label="模式" name={[field.name, 'rule']}>
                                             <Select allowClear placeholder="可选" options={modeOptions} onClick={(e) => e.stopPropagation()} />

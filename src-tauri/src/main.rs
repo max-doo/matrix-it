@@ -31,6 +31,13 @@ struct LoadLibraryResponse {
   items: serde_json::Value,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SyncFeishuOptions {
+  resync_synced: Option<bool>,
+  skip_attachment_upload: Option<bool>,
+}
+
 struct ZoteroWatchState(Mutex<Option<RecommendedWatcher>>);
 
 /// 分析任务状态管理
@@ -654,14 +661,22 @@ fn stop_analysis(state: tauri::State<AnalysisState>) -> Result<serde_json::Value
   }))
 }
 #[tauri::command]
-async fn sync_feishu(app: tauri::AppHandle, item_keys: Vec<String>) -> Result<serde_json::Value, ApiError> {
+async fn sync_feishu(
+  app: tauri::AppHandle,
+  item_keys: Vec<String>,
+  options: Option<SyncFeishuOptions>,
+) -> Result<serde_json::Value, ApiError> {
   ensure_sidecar_env();
+  let payload = serde_json::json!({
+    "keys": item_keys,
+    "options": options
+  });
   let cmd = app
     .shell()
     .sidecar("matrixit-sidecar")
     .map_err(|e| ApiError::new("SIDE_CAR_NOT_FOUND", e.to_string()))?
     .arg("sync_feishu")
-    .arg(serde_json::to_string(&item_keys).map_err(|e| ApiError::new("JSON", e.to_string()))?);
+    .arg(serde_json::to_string(&payload).map_err(|e| ApiError::new("JSON", e.to_string()))?);
 
   let (mut rx, _child) = cmd
     .spawn()
@@ -916,6 +931,64 @@ async fn update_item(
 }
 
 #[tauri::command]
+async fn purge_item_field(field_key: String) -> Result<serde_json::Value, ApiError> {
+    let key = field_key.trim();
+    if key.is_empty() {
+        return Ok(serde_json::json!({ "scanned": 0, "purged": 0 }));
+    }
+
+    let root = find_project_root();
+    let db_path = root.join("data").join("matrixit.db");
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let mut conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| ApiError::new("DB_OPEN", e.to_string()))?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS items (item_key TEXT PRIMARY KEY, json TEXT NOT NULL)",
+        [],
+    )
+    .map_err(|e| ApiError::new("DB_INIT", e.to_string()))?;
+
+    let tx = conn.transaction().map_err(|e| ApiError::new("DB_TX", e.to_string()))?;
+    let mut stmt = tx
+        .prepare("SELECT item_key, json FROM items")
+        .map_err(|e| ApiError::new("DB_QUERY", e.to_string()))?;
+
+    let mut scanned: i64 = 0;
+    let mut updates: Vec<(String, String)> = Vec::new();
+    let mut rows = stmt.query([]).map_err(|e| ApiError::new("DB_QUERY", e.to_string()))?;
+    while let Some(row) = rows.next().map_err(|e| ApiError::new("DB_QUERY", e.to_string()))? {
+        scanned += 1;
+        let item_key: String = row.get(0).map_err(|e| ApiError::new("DB_ROW", e.to_string()))?;
+        let json_str: String = row.get(1).map_err(|e| ApiError::new("DB_ROW", e.to_string()))?;
+        let mut item: serde_json::Value = serde_json::from_str(&json_str).unwrap_or(serde_json::json!({}));
+        let Some(obj) = item.as_object_mut() else { continue };
+        if obj.remove(key).is_none() {
+            continue;
+        }
+        let next = serde_json::to_string(&item).map_err(|e| ApiError::new("JSON", e.to_string()))?;
+        updates.push((item_key, next));
+    }
+    drop(rows);
+    drop(stmt);
+
+    for (item_key, next_json) in &updates {
+        tx.execute(
+            "UPDATE items SET json = ?1 WHERE item_key = ?2",
+            rusqlite::params![next_json, item_key],
+        )
+        .map_err(|e| ApiError::new("DB_WRITE", e.to_string()))?;
+    }
+
+    tx.commit().map_err(|e| ApiError::new("DB_TX", e.to_string()))?;
+
+    Ok(serde_json::json!({ "scanned": scanned, "purged": updates.len() }))
+}
+
+#[tauri::command]
 async fn read_config() -> Result<serde_json::Value, ApiError> {
   let root = find_project_root();
   let path = resolve_config_path(&root);
@@ -996,6 +1069,7 @@ fn main() {
       sync_feishu,
       reconcile_feishu,
       delete_extracted_data,
+      purge_item_field,
       update_item,
       read_config,
       save_config,

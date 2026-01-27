@@ -940,7 +940,15 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
         pass
 
 
-def sync_feishu(literature_json: str, db_path: str, root_dir: str, config_path: str, fields_path: str, keys: List[str]) -> dict:
+def sync_feishu(
+    literature_json: str,
+    db_path: str,
+    root_dir: str,
+    config_path: str,
+    fields_path: str,
+    keys: List[str],
+    options: Optional[dict] = None,
+) -> dict:
     """
     [IPC 命令] 同步到飞书多维表格。
     
@@ -961,6 +969,7 @@ def sync_feishu(literature_json: str, db_path: str, root_dir: str, config_path: 
         skip_processed=False,
         base_dir=str(root_dir),
         config_path=config_path,
+        options=options,
     )
     try:
         storage.upsert_items(db_path, updated_items)
@@ -1327,11 +1336,19 @@ def main() -> None:
 
     if cmd == "sync_feishu":
         if len(sys.argv) < 3:
-            sys.stderr.write("sync_feishu requires a JSON array argument\n")
+            sys.stderr.write("sync_feishu requires a JSON argument\n")
             sys.exit(2)
-        keys = json.loads(sys.argv[2])
+        arg = json.loads(sys.argv[2])
+        options: Optional[dict] = None
+        keys: object = []
+        if isinstance(arg, list):
+            keys = arg
+        elif isinstance(arg, dict):
+            keys = arg.get("keys") or arg.get("item_keys") or arg.get("itemKeys") or []
+            opt = arg.get("options")
+            options = opt if isinstance(opt, dict) else None
         try:
-            stats = sync_feishu(literature_json, db_path, str(root_dir), config_path, fields_path, [str(k) for k in keys])
+            stats = sync_feishu(literature_json, db_path, str(root_dir), config_path, fields_path, [str(k) for k in keys], options=options)
             sys.stdout.write(json.dumps(stats, ensure_ascii=False))
         except Exception as e:
             import traceback

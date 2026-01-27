@@ -85,7 +85,7 @@ const getStatusBadge = (
     if (processed !== 'done') return { status: 'default', text: '-', color: 'default' }
     if (sync === 'syncing') return { status: 'processing', text: '同步中', color: 'blue' }
     return sync === 'synced'
-      ? { status: 'success', text: '已同步', color: 'green' }
+      ? { status: 'success', text: '已同步', color: 'var(--primary-color)' }
       : { status: 'warning', text: '待同步', color: 'orange' }
   }
   if (processed === 'processing') return { status: 'processing', text: '分析中', color: 'blue' }
@@ -838,7 +838,12 @@ export function LiteratureTable({
               cyan: '#13c2c2',
               default: 'rgba(0, 0, 0, 0.45)',
             }
-            const textColor = badge.color && colorMap[badge.color] ? colorMap[badge.color] : undefined
+            const textColor =
+              badge.color && colorMap[badge.color]
+                ? colorMap[badge.color]
+                : typeof badge.color === 'string' && badge.color.trim().length > 0
+                  ? badge.color
+                  : undefined
             return (
               <Badge
                 status={badge.status}
