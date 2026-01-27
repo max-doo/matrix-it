@@ -11,6 +11,9 @@
 import json
 import os
 import re
+import shutil
+import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
@@ -120,6 +123,32 @@ def create_client(app_id: str, app_secret: str) -> lark.Client:
     return lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
 
 
+def _copy_to_temp_with_stability(file_path: str) -> Tuple[Optional[tempfile.TemporaryDirectory], bool]:
+    p = str(file_path or "").strip()
+    if not p or not os.path.exists(p):
+        return None, False
+
+    def _stat_sig(path: str) -> Optional[Tuple[int, int]]:
+        try:
+            st = os.stat(path)
+            return int(st.st_size), int(st.st_mtime_ns)
+        except Exception:
+            return None
+
+    stable = False
+    for _ in range(3):
+        s1 = _stat_sig(p)
+        time.sleep(0.2)
+        s2 = _stat_sig(p)
+        if s1 and s2 and s1 == s2 and s1[0] > 0:
+            stable = True
+            break
+    td = tempfile.TemporaryDirectory(prefix="matrixit_feishu_upload_")
+    dst = os.path.join(td.name, os.path.basename(p))
+    shutil.copy2(p, dst)
+    return td, stable
+
+
 def upload_file(client: lark.Client, file_path: str, parent_token: str) -> Optional[str]:
     """
     上传文件到飞书云空间。
@@ -136,24 +165,57 @@ def upload_file(client: lark.Client, file_path: str, parent_token: str) -> Optio
     """
     if not os.path.exists(file_path):
         return None
-    size = os.path.getsize(file_path)
-    with open(file_path, "rb") as f:
-        content = f.read()
+    file_path = str(file_path)
+    td: Optional[tempfile.TemporaryDirectory] = None
+    stable = False
+    snapshot_path = file_path
+    try:
+        td, stable = _copy_to_temp_with_stability(file_path)
+        if td:
+            snapshot_path = os.path.join(td.name, os.path.basename(file_path))
+            try:
+                import sys
 
-    req = UploadAllMediaRequest.builder().request_body(
-        UploadAllMediaRequestBody.builder()
-        .file_name(os.path.basename(file_path))
-        .parent_type("bitable_file")
-        .parent_node(parent_token)
-        .size(size)
-        .file(content)
-        .build()
-    ).build()
+                if stable:
+                    sys.stderr.write(f"[FEISHU] 使用临时快照上传: {file_path} -> {snapshot_path}\n")
+                else:
+                    sys.stderr.write(f"[FEISHU] ⚠ PDF 可能仍在写入，仍将使用临时快照上传: {file_path} -> {snapshot_path}\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
 
-    resp = client.drive.v1.media.upload_all(req)
-    if resp.success() and resp.data:
-        return resp.data.file_token
-    return None
+        with open(snapshot_path, "rb") as f:
+            size = os.path.getsize(snapshot_path)
+            req = UploadAllMediaRequest.builder().request_body(
+                UploadAllMediaRequestBody.builder()
+                .file_name(os.path.basename(file_path))
+                .parent_type("bitable_file")
+                .parent_node(parent_token)
+                .size(size)
+                .file((os.path.basename(file_path), f))
+                .build()
+            ).build()
+
+            resp = client.drive.v1.media.upload_all(req)
+        if resp.success() and resp.data:
+            return resp.data.file_token
+        try:
+            import sys
+
+            code = getattr(resp, "code", None)
+            msg = getattr(resp, "msg", None)
+            log_id = resp.get_log_id() if hasattr(resp, "get_log_id") else None
+            sys.stderr.write(f"[FEISHU] 上传附件失败 code={code} msg={msg} log_id={log_id} size={size}\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+        return None
+    finally:
+        if td:
+            try:
+                td.cleanup()
+            except Exception:
+                pass
 
 
 def get_existing_fields(client: lark.Client, app_token: str, table_id: str) -> Dict[str, dict]:
@@ -334,6 +396,14 @@ def map_item(item: dict, mapping: Dict[str, str], file_token: Optional[str], fie
     Returns:
         构造好的飞书 record fields 字典
     """
+    def _get_by_path(obj: object, path: str) -> object:
+        cur: object = obj
+        for part in str(path).split("."):
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(part)
+        return cur
+
     fields: Dict[str, object] = {}
     for jk, fk in mapping.items():
         if jk == "attachment":
@@ -341,10 +411,16 @@ def map_item(item: dict, mapping: Dict[str, str], file_token: Optional[str], fie
                 fields[fk] = [{"file_token": file_token}]
             continue
 
-        if jk not in item:
+        val: object = None
+        if "." in jk:
+            val = _get_by_path(item, jk)
+        elif jk in item:
+            val = item.get(jk)
+        elif jk == "tags":
+            meta = item.get("meta_extra") if isinstance(item.get("meta_extra"), dict) else {}
+            val = meta.get("tags") if isinstance(meta, dict) else None
+        else:
             continue
-
-        val = item[jk]
 
         if jk == "collections" and isinstance(val, list):
             val = [c.get("name") for c in val if isinstance(c, dict) and c.get("name")]
@@ -358,11 +434,19 @@ def map_item(item: dict, mapping: Dict[str, str], file_token: Optional[str], fie
                 val = [p.strip() for p in re.split(r"[,，]", val) if p.strip()]
             elif not isinstance(val, list):
                 val = [val]
+            val = [str(x).strip() for x in (val or []) if str(x).strip()]
         elif jk == "year" and isinstance(val, str):
             try:
                 val = int(val) if val else None
             except Exception:
                 val = None
+        elif ftype == FIELD_TYPE_TEXT:
+            if isinstance(val, (list, tuple, set)):
+                val = ", ".join([str(x).strip() for x in val if str(x).strip()])
+            elif isinstance(val, dict):
+                val = json.dumps(val, ensure_ascii=False)
+            elif not isinstance(val, str):
+                val = str(val)
 
         if val is not None:
             fields[fk] = val
@@ -460,10 +544,43 @@ def upload_items(
             except Exception:
                 pass
     fields_info = get_existing_fields(client, fc["app_token"], fc["table_id"])
+    if "attachment" not in mapping:
+        candidates = [name for name, info in fields_info.items() if int(info.get("type", 0) or 0) == FIELD_TYPE_ATTACHMENT]
+        chosen: Optional[str] = None
+        if len(candidates) == 1:
+            chosen = candidates[0]
+        elif len(candidates) > 1:
+            preferred = ["附件", "PDF", "pdf", "PDF附件", "附件(PDF)"]
+            for p in preferred:
+                for name in candidates:
+                    if p in name:
+                        chosen = name
+                        break
+                if chosen:
+                    break
+            if not chosen:
+                chosen = sorted(candidates)[0]
+        else:
+            try:
+                new_id = create_field(client, fc["app_token"], fc["table_id"], "附件", FIELD_TYPE_ATTACHMENT)
+                if new_id:
+                    fields_info = get_existing_fields(client, fc["app_token"], fc["table_id"])
+                    chosen = "附件" if "附件" in fields_info else None
+            except Exception:
+                chosen = None
+
+        if chosen:
+            mapping["attachment"] = chosen
+            try:
+                import sys
+                sys.stderr.write(f"[FEISHU] 附件字段自动映射：attachment -> {chosen}\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
 
     zotero_dir = zotero.get_zotero_dir(config_dict)
 
-    stats = {"uploaded": 0, "skipped": 0, "failed": 0}
+    stats = {"uploaded": 0, "skipped": 0, "failed": 0, "pdf_uploaded": 0, "pdf_skipped": 0, "pdf_failed": 0, "pdf_missing": 0}
 
     targets_total = 0
     for it in items:
@@ -498,9 +615,49 @@ def upload_items(
             except Exception:
                 pass
             ftoken = None
-            pdf_path = zotero.resolve_pdf_path(item, zotero_dir, base_dir=str(base_dir))
-            if pdf_path and os.path.exists(pdf_path):
-                ftoken = upload_file(client, pdf_path, fc["app_token"])
+            used_cached_token = False
+            pending_file_token: Optional[str] = None
+            pending_pdf_mtime: Optional[int] = None
+            if "attachment" in mapping:
+                pdf_path = zotero.resolve_pdf_path(item, zotero_dir, base_dir=str(base_dir))
+                if pdf_path and os.path.exists(pdf_path):
+                    mtime = None
+                    try:
+                        mtime = int(os.path.getmtime(pdf_path))
+                    except Exception:
+                        mtime = None
+                    cached_token = item.get("feishu_file_token")
+                    cached_mtime = item.get("pdf_mtime")
+                    if cached_token and mtime is not None and int(cached_mtime or -1) == mtime:
+                        ftoken = str(cached_token)
+                        stats["pdf_skipped"] += 1
+                        used_cached_token = True
+                    else:
+                        try:
+                            ftoken = upload_file(client, pdf_path, fc["app_token"])
+                        except Exception as e:
+                            ftoken = None
+                            try:
+                                import sys
+                                sys.stderr.write(f"[FEISHU] ⚠ {ik} 附件上传异常（将继续同步其他字段）：{e}\n")
+                                sys.stderr.flush()
+                            except Exception:
+                                pass
+                        if ftoken:
+                            pending_file_token = ftoken
+                            if mtime is not None:
+                                pending_pdf_mtime = mtime
+                            stats["pdf_uploaded"] += 1
+                        else:
+                            stats["pdf_failed"] += 1
+                else:
+                    stats["pdf_missing"] += 1
+                    try:
+                        import sys
+                        sys.stderr.write(f"[FEISHU] ⚠ {ik} 未找到 PDF（无法上传附件）\n")
+                        sys.stderr.flush()
+                    except Exception:
+                        pass
 
             fields = map_item(item, mapping, ftoken, fields_info)
             if not fields:
@@ -514,6 +671,7 @@ def upload_items(
                 continue
 
             record_id = item.get("record_id")
+            op = "update" if record_id else "create"
             if record_id:
                 req = (
                     UpdateAppTableRecordRequest.builder()
@@ -524,10 +682,13 @@ def upload_items(
                     .build()
                 )
                 resp = client.bitable.v1.app_table_record.update(req)
-                if not resp.success() and getattr(resp, "code", None) == 2001254043:
+                code = getattr(resp, "code", None)
+                msg = getattr(resp, "msg", None)
+                if not resp.success() and (code in (2001254043, 1254043) or str(msg or "") == "RecordIdNotFound"):
                     item.pop("record_id", None)
                     item["sync_status"] = "unsynced"
                     record_id = None
+                    op = "create(rebuild)"
                     req = (
                         CreateAppTableRecordRequest.builder()
                         .app_token(fc["app_token"])
@@ -551,6 +712,10 @@ def upload_items(
                 item["processed"] = True
                 if not record_id and resp.data and resp.data.record:
                     item["record_id"] = resp.data.record.record_id
+                if pending_file_token:
+                    item["feishu_file_token"] = pending_file_token
+                    if pending_pdf_mtime is not None:
+                        item["pdf_mtime"] = pending_pdf_mtime
                 stats["uploaded"] += 1
                 try:
                     import sys
@@ -560,9 +725,18 @@ def upload_items(
                     pass
             else:
                 stats["failed"] += 1
+                if used_cached_token:
+                    item.pop("feishu_file_token", None)
+                    item.pop("pdf_mtime", None)
                 try:
                     import sys
-                    sys.stderr.write(f"[FEISHU] ✗ {ik} 同步失败\n")
+                    code = getattr(resp, "code", None)
+                    msg = getattr(resp, "msg", None)
+                    log_id = resp.get_log_id() if hasattr(resp, "get_log_id") else None
+                    extra = ""
+                    if "attachment" in mapping:
+                        extra = f" attachment={'1' if ftoken else '0'} cached={'1' if used_cached_token else '0'}"
+                    sys.stderr.write(f"[FEISHU] ✗ {ik} 同步失败 op={op} code={code} msg={msg} log_id={log_id}{extra}\n")
                     sys.stderr.flush()
                 except Exception:
                     pass

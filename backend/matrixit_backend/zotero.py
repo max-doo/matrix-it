@@ -528,16 +528,34 @@ def get_storage_pdf_path(item: dict, zotero_dir: str) -> Optional[str]:
     atts = item.get("attachments", [])
     if not isinstance(atts, list) or not atts:
         return None
-    att0 = atts[0] if isinstance(atts[0], dict) else None
-    if not att0:
-        return None
-    att_key = str(att0.get("key") or "").strip()
-    att_filename = str(att0.get("filename") or "").strip()
-    if not att_key or not att_filename:
-        return None
-    p = Path(zotero_dir) / "storage" / att_key / att_filename
-    if p.exists():
-        return str(p.resolve())
+    storage_root = (Path(zotero_dir) / "storage").resolve()
+
+    for att in atts:
+        if not isinstance(att, dict):
+            continue
+        att_key = str(att.get("key") or "").strip()
+        att_filename = str(att.get("filename") or "").strip()
+        if att_filename:
+            try:
+                p0 = Path(att_filename)
+                if p0.is_absolute() and p0.exists():
+                    return str(p0.resolve())
+            except Exception:
+                pass
+        if att_key and att_filename:
+            p = storage_root / att_key / att_filename
+            if p.exists():
+                return str(p.resolve())
+        if att_key:
+            pdir = storage_root / att_key
+            if pdir.exists() and pdir.is_dir():
+                try:
+                    pdfs = list(pdir.glob("*.pdf"))
+                    if pdfs:
+                        pdfs.sort(key=lambda x: x.stat().st_size if x.exists() else 0, reverse=True)
+                        return str(pdfs[0].resolve())
+                except Exception:
+                    pass
     return None
 
 

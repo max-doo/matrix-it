@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Button, Input, Popover, Space } from 'antd'
+import { App as AntApp, Button, Input, Popover, Space } from 'antd'
 import type { CSSProperties, MutableRefObject } from 'react'
 import {
   CheckCircleOutlined,
@@ -51,6 +51,7 @@ type WorkbenchToolbarProps = {
   analysisPanel: ColumnPanelState
   metaFieldDefs: Record<string, unknown>
   analysisFieldDefs: Record<string, unknown>
+  matrixAnalysisSettingsOrder: string[]
   getFieldName: (defs: Record<string, unknown>, key: string) => string
   applyMetaPanelChange: (nextKeys: string[], nextHidden: Set<string>) => Promise<void>
   applyAnalysisPanelChange: (nextKeys: string[], nextHidden: Set<string>) => Promise<void>
@@ -59,6 +60,7 @@ type WorkbenchToolbarProps = {
   stoppingAnalysis: boolean
   onAnalyzeRequest: () => void
   onStopRequest: () => void
+  llmConfigured: boolean
 
   deletingExtracted: boolean
   onDeleteRequest: () => void
@@ -72,6 +74,7 @@ type WorkbenchToolbarProps = {
   feishuLastReconcileAt: number | null
   onSyncRequest: () => void
   onReconcileRequest: () => void
+  feishuApiConfigured: boolean
 
   filteredItemsCount: number
 }
@@ -104,6 +107,7 @@ export function WorkbenchToolbar({
   analysisPanel,
   metaFieldDefs,
   analysisFieldDefs,
+  matrixAnalysisSettingsOrder,
   getFieldName,
   applyMetaPanelChange,
   applyAnalysisPanelChange,
@@ -111,6 +115,7 @@ export function WorkbenchToolbar({
   stoppingAnalysis,
   onAnalyzeRequest,
   onStopRequest,
+  llmConfigured,
   deletingExtracted,
   onDeleteRequest,
   feishuSyncing,
@@ -122,8 +127,10 @@ export function WorkbenchToolbar({
   feishuLastReconcileAt,
   onSyncRequest,
   onReconcileRequest,
+  feishuApiConfigured,
   filteredItemsCount,
 }: WorkbenchToolbarProps) {
+  const { message } = AntApp.useApp()
   const searchHelpText = useMemo(() => {
     const scope =
       activeView === 'matrix' ? '标题、作者、分析字段（不含关键词/文献类型）' : '标题、作者'
@@ -245,6 +252,7 @@ export function WorkbenchToolbar({
           analysisPanel={analysisPanel}
           metaFieldDefs={metaFieldDefs}
           analysisFieldDefs={analysisFieldDefs}
+          matrixAnalysisSettingsOrder={matrixAnalysisSettingsOrder}
           getFieldName={getFieldName}
           applyMetaPanelChange={applyMetaPanelChange}
           applyAnalysisPanelChange={applyAnalysisPanelChange}
@@ -256,7 +264,13 @@ export function WorkbenchToolbar({
             icon={feishuIcon}
             aria-label="同步到飞书"
             title={feishuTitle}
-            onClick={handleFeishuAction}
+            onClick={() => {
+              if (!feishuApiConfigured) {
+                message.warning('飞书 API 未配置完成，请到设置页填写 App ID / App Secret / Bitable URL')
+                return
+              }
+              handleFeishuAction()
+            }}
             disabled={!feishuSyncEnabled || feishuBusy}
           />
         ) : null}
@@ -277,7 +291,17 @@ export function WorkbenchToolbar({
           type={analysisInProgress ? 'default' : 'primary'}
           danger={analysisInProgress}
           icon={analysisInProgress ? <StopOutlined /> : <PlayCircleOutlined />}
-          onClick={analysisInProgress ? onStopRequest : onAnalyzeRequest}
+          onClick={
+            analysisInProgress
+              ? onStopRequest
+              : () => {
+                  if (!llmConfigured) {
+                    message.warning('模型 API 未配置完成，请到设置页填写 API Key / Base URL / Model')
+                    return
+                  }
+                  onAnalyzeRequest()
+                }
+          }
           disabled={analysisInProgress ? stoppingAnalysis : selectedCount === 0}
         >
           {analysisInProgress ? '终止分析' : activeView === 'matrix' ? '重新分析' : '开始分析'}

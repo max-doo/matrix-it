@@ -121,7 +121,12 @@ export function LiteratureDetailDrawer({
     const next: Record<string, string> = {}
     for (const f of analysisFields) {
       const v = it[f.key]
-      next[f.key] = Array.isArray(v) ? v.filter(Boolean).join(', ') : toText(v)
+      if (Array.isArray(v)) {
+        const parts = v.map((x) => String(x || '').trim()).filter(Boolean)
+        next[f.key] = f.type === 'multi_select' ? parts.join(', ') : parts.join('\n')
+      } else {
+        next[f.key] = toText(v)
+      }
     }
     setDraft(next)
     setSnapshot(next)
@@ -503,7 +508,10 @@ export function LiteratureDetailDrawer({
                       .map((f) => {
                         const raw = (item as Record<string, unknown>)[f.key]
                         const v = Array.isArray(raw)
-                          ? raw.map((x) => String(x || '').trim()).filter(Boolean).join(', ')
+                          ? (() => {
+                            const parts = raw.map((x) => String(x || '').trim()).filter(Boolean)
+                            return f.type === 'multi_select' ? parts.join(', ') : parts.join('\n')
+                          })()
                           : toText(raw).trim()
                         if (!v) return null
                         return (

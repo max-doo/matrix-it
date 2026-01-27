@@ -7,6 +7,7 @@ import { useCallback, useMemo } from 'react'
 import { message } from 'antd'
 import type { LiteratureTableColumnOption } from '../components/LiteratureTable'
 import { saveConfig } from '../../lib/backend'
+import { DEFAULT_META_COLUMN_ORDER } from '../defaults/metaColumnOrder'
 
 export function useColumnConfig(
     rawConfig: Record<string, unknown>,
@@ -112,15 +113,16 @@ export function useColumnConfig(
     )
 
     const metaColumnPanel = useMemo(() => {
-        const primaryKeys = ['title', 'author', 'year', 'type', 'tags', 'publications']
+        const primaryKeys = ['title', 'author', 'year', 'type', 'publications', 'tags']
         const allKeys = primaryKeys.filter((k) => {
             if (activeView === 'matrix' && k === 'tags') return false
             if (['year', 'author', 'type', 'publications'].includes(k)) return true
             return k in metaFieldDefs || k === 'tags'
         })
+        const defaultVisible = DEFAULT_META_COLUMN_ORDER.filter((k) => allKeys.includes(k))
         const viewUi = (uiTableColumns as Record<string, unknown>)[activeView] as Record<string, unknown> | undefined
         const metaUi = (viewUi?.meta as Record<string, unknown>) ?? {}
-        const visible = readVisibleKeys(metaUi, allKeys, allKeys, true)
+        const visible = readVisibleKeys(metaUi, allKeys, defaultVisible, true)
         const hidden = new Set(allKeys.filter((k) => k !== 'title' && !visible.includes(k)))
         const mergedOrder = [...visible.filter((k) => k !== 'title'), ...allKeys.filter((k) => k !== 'title' && !visible.includes(k))]
         return { keys: mergedOrder, hidden, allKeys }
@@ -136,6 +138,20 @@ export function useColumnConfig(
         const mergedOrder = [...visible, ...allKeys.filter((k) => !visible.includes(k))]
         return { keys: mergedOrder, hidden, allKeys }
     }, [activeView, analysisFieldDefs, readVisibleKeys, uiTableColumns])
+
+    const matrixAnalysisSettingsOrder = useMemo(() => {
+        if (activeView !== 'matrix') return [] as string[]
+        const allKeys = Object.keys(analysisFieldDefs)
+        const matrixUi = (uiTableColumns.matrix as Record<string, unknown>) ?? {}
+        const analysisUi = (matrixUi.analysis as Record<string, unknown>) ?? {}
+        const orderRaw = analysisUi.order
+        const order = Array.isArray(orderRaw)
+            ? (orderRaw as unknown[])
+                .map((x) => String(x || '').trim())
+                .filter((k) => k.length > 0 && allKeys.includes(k))
+            : []
+        return [...order, ...allKeys.filter((k) => !order.includes(k))]
+    }, [activeView, analysisFieldDefs, uiTableColumns.matrix])
 
     const matrixAnalysisOrder = useMemo(() => {
         const allKeys = Object.keys(analysisFieldDefs)
@@ -178,15 +194,16 @@ export function useColumnConfig(
     }, [])
 
     const tableMetaColumns = useMemo<LiteratureTableColumnOption[]>(() => {
-        const primaryKeys = ['title', 'author', 'year', 'type', 'tags', 'publications']
+        const primaryKeys = ['title', 'author', 'year', 'type', 'publications', 'tags']
         const allKeys = primaryKeys.filter((k) => {
             if (activeView === 'matrix' && k === 'tags') return false
             if (['year', 'author', 'type', 'publications'].includes(k)) return true
             return k in metaFieldDefs || k === 'tags'
         })
+        const defaultVisible = DEFAULT_META_COLUMN_ORDER.filter((k) => allKeys.includes(k))
         const viewUi = (uiTableColumns as Record<string, unknown>)[activeView] as Record<string, unknown> | undefined
         const metaUi = (viewUi?.meta as Record<string, unknown>) ?? {}
-        const visible = readVisibleKeys(metaUi, allKeys, allKeys, true)
+        const visible = readVisibleKeys(metaUi, allKeys, defaultVisible, true)
         return visible.map((key) => {
             if (key === 'tags') return { key: 'tags', label: '标签' }
             const def = ((metaFieldDefs as Record<string, unknown>)[key] ?? {}) as Record<string, unknown>
@@ -213,6 +230,7 @@ export function useColumnConfig(
     return {
         metaColumnPanel,
         analysisColumnPanel,
+        matrixAnalysisSettingsOrder,
         matrixAnalysisOrder,
         applyMetaPanelChange,
         applyAnalysisPanelChange,

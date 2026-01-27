@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Popover } from 'antd'
 import { BarsOutlined, EyeInvisibleOutlined, EyeOutlined, HolderOutlined } from '@ant-design/icons'
+import { DEFAULT_META_COLUMN_ORDER } from '../defaults/metaColumnOrder'
 
 export type ColumnPanelGroup = 'meta' | 'analysis'
 
@@ -22,6 +23,7 @@ export type ColumnSettingsPopoverProps = {
   analysisPanel: ColumnPanelState
   metaFieldDefs: Record<string, unknown>
   analysisFieldDefs: Record<string, unknown>
+  matrixAnalysisSettingsOrder: string[]
   getFieldName: (defs: Record<string, unknown>, key: string) => string
   applyMetaPanelChange: (nextKeys: string[], nextHidden: Set<string>) => Promise<void>
   applyAnalysisPanelChange: (nextKeys: string[], nextHidden: Set<string>) => Promise<void>
@@ -35,6 +37,7 @@ export function ColumnSettingsPopover({
   analysisPanel,
   metaFieldDefs,
   analysisFieldDefs,
+  matrixAnalysisSettingsOrder,
   getFieldName,
   applyMetaPanelChange,
   applyAnalysisPanelChange,
@@ -79,6 +82,24 @@ export function ColumnSettingsPopover({
 
   const currentMetaKeys = useMemo(() => draftKeys.meta ?? metaPanel.keys, [draftKeys.meta, metaPanel.keys])
   const currentAnalysisKeys = useMemo(() => draftKeys.analysis ?? analysisPanel.keys, [analysisPanel.keys, draftKeys.analysis])
+
+  const resetMetaDefaults = useCallback(async () => {
+    const allKeys = metaPanel.allKeys
+    const ordered = DEFAULT_META_COLUMN_ORDER.filter((k) => allKeys.includes(k) && k !== 'title')
+    const rest = allKeys.filter((k) => k !== 'title' && !ordered.includes(k))
+    const nextKeys = [...ordered, ...rest]
+    setDraftKeys((prev) => ({ ...prev, meta: nextKeys }))
+    await applyMetaPanelChange(nextKeys, new Set())
+  }, [applyMetaPanelChange, metaPanel.allKeys])
+
+  const resetAnalysisDefaults = useCallback(async () => {
+    const allKeys = analysisPanel.allKeys
+    const ordered = matrixAnalysisSettingsOrder.filter((k) => allKeys.includes(k))
+    const rest = allKeys.filter((k) => !ordered.includes(k))
+    const nextKeys = [...ordered, ...rest]
+    setDraftKeys((prev) => ({ ...prev, analysis: nextKeys }))
+    await applyAnalysisPanelChange(nextKeys, new Set())
+  }, [analysisPanel.allKeys, applyAnalysisPanelChange, matrixAnalysisSettingsOrder])
 
   const startDrag = useCallback(
     (group: ColumnPanelGroup, key: string) => (e: React.MouseEvent) => {
@@ -155,7 +176,12 @@ export function ColumnSettingsPopover({
       data-tauri-drag-region="false"
       className="w-56 max-w-[calc(100vw-32px)] max-h-[70vh] overflow-auto custom-scrollbar p-1"
     >
-      <div className="text-xs secondary-color mb-2 px-1">元数据字段</div>
+      <div className="flex items-center justify-between gap-2 text-xs secondary-color mb-2 px-1">
+        <span>元数据字段</span>
+        <Button type="link" size="small" onClick={resetMetaDefaults}>
+          恢复默认
+        </Button>
+      </div>
       <div className="flex flex-col gap-1">
         {currentMetaKeys.map((k) => {
           const hidden = metaPanel.hidden.has(k)
@@ -206,7 +232,12 @@ export function ColumnSettingsPopover({
       {activeView === 'matrix' ? (
         <>
           <div className="h-px bg-slate-100 my-3" />
-          <div className="text-xs secondary-color mb-2 px-1">分析字段</div>
+          <div className="flex items-center justify-between gap-2 text-xs secondary-color mb-2 px-1">
+            <span>分析字段</span>
+            <Button type="link" size="small" onClick={resetAnalysisDefaults}>
+              恢复默认
+            </Button>
+          </div>
           <div className="flex flex-col gap-1">
             {currentAnalysisKeys.map((k) => {
               const hidden = analysisPanel.hidden.has(k)

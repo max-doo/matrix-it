@@ -25,7 +25,8 @@ matrix-it/
 │  │     ├─ App.tsx               # 主界面：布局组装 + 状态 glue（核心逻辑下沉到 hooks）
 │  │     ├─ styles.css            # Tailwind 基础样式 + 少量全局样式
 │  │     ├─ defaults/
-│  │     │  └─ analysisFields.ts  # 默认解析字段定义
+│  │     │  ├─ analysisFields.ts  # 默认解析字段定义
+│  │     │  └─ metaColumnOrder.ts # 元数据字段默认显示顺序（列设置“恢复默认”使用）
 │  │     ├─ hooks/                # 状态管理 hooks（库刷新/引用/分析/设置/筛选/列配置/详情保存/详情导航）
 │  │     ├─ lib/                  # UI 侧轻量工具（storage/theme/collection utils）
 │  │     ├─ utils/
@@ -167,6 +168,9 @@ matrix-it/
 UI 表格列配置说明（`config/config.json` → `ui.table_columns`）：
 - 仅使用 `visible` 数组表示“显示字段 + 显示顺序”
 - 旧版 `order/hidden` 配置仍可读取，但保存时会自动写回为 `visible`
+- “字段设置”弹窗的“恢复默认”：
+  - 元数据字段：按 `frontend/src/ui/defaults/metaColumnOrder.ts` 规定的顺序恢复（默认全部显示；其中部分字段仅用于默认顺序，不会在表格视图中展示）
+  - 分析字段：按设置页中的分析字段顺序（`ui.table_columns.matrix.analysis.order`）恢复（默认全部显示）
 
 ### 3) 安装依赖
 

@@ -7,7 +7,7 @@ export type DefaultAnalysisFieldRow = {
   key: string
   name: string
   rule: 'A' | 'B'
-  type: 'string' | 'number' | 'select' | 'multi_select' | 'file'
+  type: 'string' | 'select' | 'multi_select'
   description: string
 }
 
@@ -44,8 +44,8 @@ export const DEFAULT_ANALYSIS_FIELDS: DefaultAnalysisFieldRow[] = [
     key: 'bib_type',
     name: '文献类型',
     rule: 'A',
-    type: 'multi_select',
-    description: '根据文献的内容判断文献的类型，如：研究论文、方法论论文、综述论文、案例研究、研究报告、行业指南等',
+    type: 'select',
+    description: '根据文献的内容判断文献的类型，如：研究论文，方法论论文，综述论文，案例研究，研究报告，行业指南等。只能输入一种最佳的类型，禁止出现多种类型。',
   },
   {
     key: 'research_question',

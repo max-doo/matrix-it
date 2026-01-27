@@ -28,8 +28,8 @@ import {
 
 import { DEFAULT_ANALYSIS_FIELDS } from '../defaults/analysisFields'
 import { App, Space, Segmented, Collapse, Tooltip, message } from 'antd'
-import { QuestionCircleOutlined, ThunderboltOutlined, EditOutlined, ApiOutlined, CloudServerOutlined } from '@ant-design/icons'
-import { listModels } from '../../lib/backend'
+import { QuestionCircleOutlined, ThunderboltOutlined, EditOutlined, ApiOutlined, CloudServerOutlined, LinkOutlined } from '@ant-design/icons'
+import { listModels, openExternal } from '../../lib/backend'
 
 const PROVIDERS = [
   { label: '自定义 (Custom)', value: 'custom', baseUrl: '' },
@@ -382,7 +382,7 @@ export function SettingsPage({
   onReload: () => void
   onAutoSave: () => void
 }) {
-  const { modal } = App.useApp()
+  const { modal, message: messageApi } = App.useApp()
   const scrollRootRef = useRef<HTMLDivElement | null>(null)
   const zoteroRef = useRef<HTMLDivElement | null>(null)
   const llmRef = useRef<HTMLDivElement | null>(null)
@@ -616,7 +616,7 @@ export function SettingsPage({
                     飞书多维表格 API
                   </Typography.Title>
                   <Typography.Paragraph type="secondary" className="!mt-0">
-                    支持填写 `bitable_url`，后端会自动解析 `app_token/table_id`。
+                    仅需填写 Bitable URL，后端会自动解析必要信息。
                   </Typography.Paragraph>
                   <Divider className="!my-3" />
 
@@ -636,13 +636,35 @@ export function SettingsPage({
                       name={['feishu', 'bitable_url']}
                       rules={[{ required: true, message: '请输入多维表格链接' }]}
                     >
-                      <Input placeholder="https://.../base/bascn.../tbl..." autoComplete="off" />
-                    </Form.Item>
-                    <Form.Item label="App Token（可选）" name={['feishu', 'app_token']}>
-                      <Input autoComplete="off" />
-                    </Form.Item>
-                    <Form.Item label="Table ID（可选）" name={['feishu', 'table_id']}>
-                      <Input autoComplete="off" />
+                      <Input
+                        placeholder="https://.../base/bascn.../tbl..."
+                        autoComplete="off"
+                        addonAfter={
+                          <Tooltip title="用系统默认浏览器打开">
+                            <Button
+                              type="text"
+                              aria-label="打开飞书多维表格"
+                              icon={<LinkOutlined />}
+                              onClick={async () => {
+                                const url = String(configForm.getFieldValue(['feishu', 'bitable_url']) ?? '').trim()
+                                if (!url) {
+                                  messageApi.warning('请先填写 Bitable URL')
+                                  return
+                                }
+                                try {
+                                  const res = await openExternal(url)
+                                  if (!res.opened) {
+                                    messageApi.warning('链接无效或无法打开')
+                                  }
+                                } catch (e) {
+                                  const msg = e instanceof Error ? e.message : '打开失败'
+                                  messageApi.error(msg)
+                                }
+                              }}
+                            />
+                          </Tooltip>
+                        }
+                      />
                     </Form.Item>
                   </div>
                 </div>

@@ -218,6 +218,7 @@ export default function App() {
   const {
     metaColumnPanel,
     analysisColumnPanel,
+    matrixAnalysisSettingsOrder,
     matrixAnalysisOrder,
     applyMetaPanelChange,
     applyAnalysisPanelChange,
@@ -338,6 +339,30 @@ export default function App() {
     if (!feishuLastReconcileAt) return true
     return Date.now() - feishuLastReconcileAt > 10 * 60 * 1000
   }, [activeView, feishuLastReconcileAt, feishuSyncEnabled])
+  const llmConfigured = useMemo(() => {
+    const llm = rawConfig.llm
+    if (!llm || typeof llm !== 'object') return false
+    const llmObj = llm as Record<string, unknown>
+    const apiKey = typeof llmObj.api_key === 'string' ? llmObj.api_key.trim() : ''
+    const baseUrl = typeof llmObj.base_url === 'string' ? llmObj.base_url.trim() : ''
+    const modelRaw = llmObj.model
+    const model = Array.isArray(modelRaw)
+      ? String(modelRaw[0] ?? '').trim()
+      : typeof modelRaw === 'string'
+        ? modelRaw.trim()
+        : String(modelRaw ?? '').trim()
+    return apiKey.length > 0 && baseUrl.length > 0 && model.length > 0
+  }, [rawConfig.llm])
+  const feishuApiConfigured = useMemo(() => {
+    const feishu = rawConfig.feishu
+    if (!feishu || typeof feishu !== 'object') return false
+    const feishuObj = feishu as Record<string, unknown>
+    const appId = typeof feishuObj.app_id === 'string' ? feishuObj.app_id.trim() : ''
+    const appSecret = typeof feishuObj.app_secret === 'string' ? feishuObj.app_secret.trim() : ''
+    const bitableUrl = typeof feishuObj.bitable_url === 'string' ? feishuObj.bitable_url.trim() : ''
+    if (!appId || !appSecret) return false
+    return bitableUrl.length > 0
+  }, [rawConfig.feishu])
   const { activeItem, canPrevDetail, canNextDetail, goPrevDetail, goNextDetail } = useDetailNavigation(
     library.items,
     filteredItems,
@@ -658,6 +683,7 @@ export default function App() {
                         analysisPanel={analysisColumnPanel}
                         metaFieldDefs={metaFieldDefs}
                         analysisFieldDefs={analysisFieldDefs}
+                        matrixAnalysisSettingsOrder={matrixAnalysisSettingsOrder}
                         getFieldName={getFieldName}
                         applyMetaPanelChange={applyMetaPanelChange}
                         applyAnalysisPanelChange={applyAnalysisPanelChange}
@@ -665,6 +691,7 @@ export default function App() {
                         stoppingAnalysis={stoppingAnalysis}
                         onAnalyzeRequest={handleAnalysisRequest}
                         onStopRequest={handleStopAnalysisRequest}
+                        llmConfigured={llmConfigured}
                         deletingExtracted={deletingExtracted}
                         onDeleteRequest={handleDeleteRequest}
                         feishuSyncing={feishuSyncing}
@@ -676,6 +703,7 @@ export default function App() {
                         feishuLastReconcileAt={feishuLastReconcileAt}
                         onSyncRequest={handleSyncFeishuRequest}
                         onReconcileRequest={handleReconcileFeishuRequest}
+                        feishuApiConfigured={feishuApiConfigured}
                         filteredItemsCount={filteredItems.length}
                       />
                     </div>

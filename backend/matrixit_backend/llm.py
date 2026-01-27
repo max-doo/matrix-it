@@ -145,15 +145,58 @@ def _extract_json(text: str) -> Dict[str, Any]:
     except Exception:
         pass
 
+    def _escape_unescaped_controls_in_json_strings(s: str) -> str:
+        out: List[str] = []
+        in_string = False
+        escaped = False
+        for ch in s:
+            if in_string:
+                if escaped:
+                    out.append(ch)
+                    escaped = False
+                    continue
+                if ch == "\\":
+                    out.append(ch)
+                    escaped = True
+                    continue
+                if ch == '"':
+                    out.append(ch)
+                    in_string = False
+                    continue
+                if ch == "\n":
+                    out.append("\\n")
+                    continue
+                if ch == "\r":
+                    out.append("\\r")
+                    continue
+                if ch == "\t":
+                    out.append("\\t")
+                    continue
+                out.append(ch)
+                continue
+            if ch == '"':
+                out.append(ch)
+                in_string = True
+                continue
+            out.append(ch)
+        return "".join(out)
+
     start = raw.find("{")
     end = raw.rfind("}")
     if start >= 0 and end > start:
+        snippet = raw[start : end + 1]
         try:
-            obj = json.loads(raw[start : end + 1])
+            obj = json.loads(snippet)
             if isinstance(obj, dict):
                 return obj
         except Exception:
-            pass
+            try:
+                repaired = _escape_unescaped_controls_in_json_strings(snippet)
+                obj = json.loads(repaired)
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                pass
     raise LlmError("LLM_INVALID_JSON", "模型返回内容不是有效的 JSON 对象")
 
 def _safe_base_url(base_url: str) -> str:
