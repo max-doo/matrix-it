@@ -1,7 +1,16 @@
 import { useMemo } from 'react'
 import { Button, Input, Popover, Space } from 'antd'
 import type { CSSProperties, MutableRefObject } from 'react'
-import { DeleteOutlined, PlayCircleOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons'
+import {
+  CheckCircleOutlined,
+  ExclamationCircleOutlined,
+  CloudUploadOutlined,
+  DeleteOutlined,
+  LoadingOutlined,
+  PlayCircleOutlined,
+  SearchOutlined,
+  StopOutlined,
+} from '@ant-design/icons'
 import type { FilterMode } from '../../types'
 import type { FieldFilterState } from '../hooks/useFilterState'
 import type { LiteratureTableView } from './LiteratureTable'
@@ -53,6 +62,12 @@ type WorkbenchToolbarProps = {
   deletingExtracted: boolean
   onDeleteRequest: () => void
 
+  feishuSyncing: boolean
+  feishuPendingCount: number
+  feishuLastError: string | null
+  feishuSyncEnabled: boolean
+  onSyncRequest: () => void
+
   filteredItemsCount: number
 }
 
@@ -93,11 +108,30 @@ export function WorkbenchToolbar({
   onStopRequest,
   deletingExtracted,
   onDeleteRequest,
+  feishuSyncing,
+  feishuPendingCount,
+  feishuLastError,
+  feishuSyncEnabled,
+  onSyncRequest,
   filteredItemsCount,
 }: WorkbenchToolbarProps) {
   const searchHelpText = useMemo(() => {
     return normalizedSearchQuery ? `匹配 ${filteredItemsCount} 条（标题/作者模糊）` : '支持模糊搜索：标题、作者'
   }, [filteredItemsCount, normalizedSearchQuery])
+
+  const feishuIcon = useMemo(() => {
+    if (feishuSyncing) return <LoadingOutlined spin />
+    if (feishuLastError) return <ExclamationCircleOutlined />
+    if (feishuPendingCount > 0) return <CloudUploadOutlined />
+    return <CheckCircleOutlined />
+  }, [feishuLastError, feishuPendingCount, feishuSyncing])
+
+  const feishuTitle = useMemo(() => {
+    if (feishuSyncing) return '正在同步到飞书…'
+    if (feishuLastError) return `同步失败：${feishuLastError}（点击重试）`
+    if (feishuPendingCount > 0) return `待同步 ${feishuPendingCount} 条（点击同步）`
+    return '已同步'
+  }, [feishuLastError, feishuPendingCount, feishuSyncing])
 
   return (
     <div className="flex items-center gap-3">
@@ -193,6 +227,17 @@ export function WorkbenchToolbar({
           applyAnalysisPanelChange={applyAnalysisPanelChange}
         />
 
+        {activeView === 'matrix' ? (
+          <Button
+            key="sync_feishu"
+            icon={feishuIcon}
+            aria-label="同步到飞书"
+            title={feishuTitle}
+            onClick={onSyncRequest}
+            disabled={!feishuSyncEnabled || feishuSyncing}
+          />
+        ) : null}
+
         <Button
           key="analyze"
           type={analysisInProgress ? 'default' : 'primary'}
@@ -210,7 +255,8 @@ export function WorkbenchToolbar({
             danger
             icon={<DeleteOutlined />}
             onClick={onDeleteRequest}
-            disabled={selectedCount === 0 || deletingExtracted}
+            title={deletingExtracted ? '正在删除…（可继续删除其它条目）' : '删除已提取数据'}
+            disabled={selectedCount === 0}
           />
         ) : null}
       </Space>

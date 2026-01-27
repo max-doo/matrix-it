@@ -3,12 +3,14 @@ import {
   ConfigProvider,
   Layout,
   Button,
+  message,
   App as AntApp,
   Segmented,
 } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 
-import type { LiteratureItem } from '../types'
+import type { AnalysisReport, LiteratureItem } from '../types'
+import { syncFeishu as syncFeishuRpc } from '../lib/backend'
 import { AppSidebar } from './components/AppSidebar'
 import { LiteratureTable, type LiteratureTableView } from './components/LiteratureTable'
 import { TitleBar } from './components/TitleBar'
@@ -27,6 +29,7 @@ import { useItemUpdater } from './hooks/useItemUpdater'
 import { useLibraryState, useZoteroWatch } from './hooks/useLibraryState'
 import { STORAGE_KEYS, deleteKey, readString, writeString } from './lib/storage'
 import { collectCollectionKeys } from './lib/collectionUtils'
+import { createAnalysisResultUi } from './components/analysisResultUi'
 
 const { Sider, Content } = Layout
 
@@ -41,6 +44,7 @@ type ConfirmApi = {
     onAnalyzeUnprocessed: () => void
   }) => void
   confirmStop: (opts: { onOk: () => void | Promise<void> }) => void
+  showAnalysisResult: (report: AnalysisReport) => void
 }
 
 function ConfirmController({
@@ -48,9 +52,11 @@ function ConfirmController({
 }: {
   apiRef: React.MutableRefObject<ConfirmApi | null>
 }) {
-  const { modal } = AntApp.useApp()
+  const { modal, message } = AntApp.useApp()
 
   useEffect(() => {
+    const analysisUi = createAnalysisResultUi(modal, message)
+
     apiRef.current = {
       confirmDelete: ({ total, onOk }) => {
         void modal.confirm({
@@ -59,8 +65,13 @@ function ConfirmController({
           okText: '删除',
           okButtonProps: { danger: true },
           cancelText: '取消',
-          onOk: async () => {
-            await onOk()
+          onOk: () => {
+            void Promise.resolve()
+              .then(() => onOk())
+              .catch((e) => {
+                const msg = e instanceof Error ? e.message : '删除失败'
+                message.error(msg)
+              })
           },
         })
       },
@@ -112,14 +123,19 @@ function ConfirmController({
           },
         })
       },
+      showAnalysisResult: (report: AnalysisReport) => {
+        analysisUi.showToast(report)
+      },
     }
-
     return () => {
       apiRef.current = null
     }
   }, [apiRef, modal])
 
   return null
+
+
+
 }
 
 /**
@@ -181,6 +197,8 @@ export default function App() {
   const [currentPageRows, setCurrentPageRows] = useState<LiteratureItem[]>([])
   const [tableSortedKeys, setTableSortedKeys] = useState<string[]>([])
   const [detailMode, setDetailMode] = useState<LiteratureDetailDrawerMode>(() => (readString(STORAGE_KEYS.ACTIVE_VIEW) ?? 'zotero') === 'matrix' ? 'matrix' : 'zotero')
+  const [feishuSyncing, setFeishuSyncing] = useState(false)
+  const [feishuSyncLastError, setFeishuSyncLastError] = useState<string | null>(null)
   const {
     metaColumnPanel,
     analysisColumnPanel,
@@ -204,7 +222,15 @@ export default function App() {
     startAnalysis: startAnalysis,
     handleConfirmDelete,
     handleConfirmStopAnalysis,
-  } = useAnalysisState(library, setLibrary, selectedRowKeys, setSelectedRowKeys, handleRefresh, analysisInProgressRef)
+  } = useAnalysisState(
+    library,
+    setLibrary,
+    selectedRowKeys,
+    setSelectedRowKeys,
+    handleRefresh,
+    analysisInProgressRef,
+    (report) => confirmApiRef.current?.showAnalysisResult(report)
+  )
   const { saveMatrixPatch } = useItemUpdater(setLibrary)
 
   const handleSelectCollection = useCallback((key: string) => {
@@ -277,6 +303,14 @@ export default function App() {
   const collectionItems = useCollectionItems(library, activeCollectionKey)
   const { filterYearOptions, filterTypeOptions, filterTagOptions, filterKeywordOptions, filterBibTypeOptions } = useFilterOptions(collectionItems)
   const filteredItems = useFilteredItems(collectionItems, filterMode, fieldFilter, normalizedSearchQuery)
+  const feishuPendingCount = useMemo(() => {
+    if (activeView !== 'matrix') return 0
+    return filteredItems.filter((it) => it.processed_status === 'done' && it.sync_status !== 'synced').length
+  }, [activeView, filteredItems])
+  const feishuSyncEnabled = useMemo(() => {
+    if (activeView !== 'matrix') return false
+    return filteredItems.some((it) => it.processed_status === 'done')
+  }, [activeView, filteredItems])
   const { activeItem, canPrevDetail, canNextDetail, goPrevDetail, goNextDetail } = useDetailNavigation(
     library.items,
     filteredItems,
@@ -348,18 +382,69 @@ export default function App() {
 
   const handleDeleteRequest = useCallback(() => {
     const keys = selectedRowKeys as string[]
-    if (keys.length === 0 || deletingExtracted) return
+    if (keys.length === 0) return
     confirmApiRef.current?.confirmDelete({
       total: selectedItemStats.total,
       onOk: handleConfirmDelete,
     })
-  }, [deletingExtracted, handleConfirmDelete, selectedItemStats.total, selectedRowKeys])
+  }, [handleConfirmDelete, selectedItemStats.total, selectedRowKeys])
 
   const handleStopAnalysisRequest = useCallback(() => {
     confirmApiRef.current?.confirmStop({
       onOk: handleConfirmStopAnalysis,
     })
   }, [handleConfirmStopAnalysis])
+
+  const handleSyncFeishuRequest = useCallback(async () => {
+    if (activeView !== 'matrix') return
+    if (feishuSyncing) return
+
+    const selected = new Set(selectedRowKeys.map((k) => String(k)))
+    const selectedItems = library.items.filter((it) => selected.has(it.item_key))
+    const base = selectedItems.length > 0 ? selectedItems : filteredItems
+    const keys = base
+      .filter((it) => it.processed_status === 'done' && it.sync_status !== 'synced')
+      .map((it) => it.item_key)
+
+    if (keys.length === 0) {
+      message.info('没有待同步条目')
+      return
+    }
+
+    setFeishuSyncing(true)
+    setFeishuSyncLastError(null)
+    setLibrary((prev) => ({
+      ...prev,
+      items: prev.items.map((it) => (keys.includes(it.item_key) ? { ...it, sync_status: 'syncing' } : it)),
+    }))
+    try {
+      const res = (await syncFeishuRpc(keys)) as unknown as Record<string, unknown>
+      const err = res?.error as Record<string, unknown> | undefined
+      if (err && typeof err === 'object') {
+        const msg = String(err.message || err.code || '同步失败')
+        setFeishuSyncLastError(msg)
+        message.error(msg)
+        return
+      }
+
+      const uploaded = Number(res?.uploaded ?? 0)
+      const failed = Number(res?.failed ?? 0)
+      if (failed > 0) {
+        const msg = `同步完成：成功 ${uploaded} 条，失败 ${failed} 条`
+        setFeishuSyncLastError(`失败 ${failed} 条`)
+        message.warning(msg)
+      } else {
+        message.success(`已同步 ${uploaded} 条`)
+      }
+      await refreshLibrary('auto')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '同步失败'
+      setFeishuSyncLastError(msg)
+      message.error(msg)
+    } finally {
+      setFeishuSyncing(false)
+    }
+  }, [activeView, feishuSyncing, filteredItems, library.items, refreshLibrary, selectedRowKeys])
 
   const segmentedOptions: { label: string; value: string }[] = [
     { label: 'Zotero库', value: 'zotero' },
@@ -487,6 +572,11 @@ export default function App() {
                         onStopRequest={handleStopAnalysisRequest}
                         deletingExtracted={deletingExtracted}
                         onDeleteRequest={handleDeleteRequest}
+                        feishuSyncing={feishuSyncing}
+                        feishuPendingCount={feishuPendingCount}
+                        feishuLastError={feishuSyncLastError}
+                        feishuSyncEnabled={feishuSyncEnabled}
+                        onSyncRequest={handleSyncFeishuRequest}
                         filteredItemsCount={filteredItems.length}
                       />
                     </div>

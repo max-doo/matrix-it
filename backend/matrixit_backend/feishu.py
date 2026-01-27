@@ -23,11 +23,13 @@ from lark_oapi.api.bitable.v1 import (
     CreateAppTableRecordRequest,
     DeleteAppTableRecordRequest,
     ListAppTableFieldRequest,
+    UpdateAppTableFieldRequest,
     UpdateAppTableRecordRequest,
 )
 from lark_oapi.api.drive.v1 import UploadAllMediaRequest, UploadAllMediaRequestBody
 
 from matrixit_backend import zotero
+from matrixit_backend.config import save_local_config_patch
 
 FIELD_TYPE_TEXT = 1
 FIELD_TYPE_NUMBER = 2
@@ -214,11 +216,38 @@ def create_field(client: lark.Client, app_token: str, table_id: str, name: str, 
     return None
 
 
-def ensure_fields(client: lark.Client, app_token: str, table_id: str, fields_def: dict, mapping: Dict[str, str]) -> None:
+def update_field(client: lark.Client, app_token: str, table_id: str, field_id: str, name: str, ftype: int) -> bool:
     """
-    确保 feishu_field 映射中定义的字段在多维表中真实存在。
+    更新多维表字段（用于字段重命名等）。
+    """
+    fid = str(field_id or "").strip()
+    if not fid:
+        return False
+    req = (
+        UpdateAppTableFieldRequest.builder()
+        .app_token(app_token)
+        .table_id(table_id)
+        .field_id(fid)
+        .request_body(AppTableField.builder().field_name(name).type(ftype).build())
+        .build()
+    )
+    resp = client.bitable.v1.app_table_field.update(req)
+    return bool(resp.success())
+
+
+def ensure_fields(
+    client: lark.Client,
+    app_token: str,
+    table_id: str,
+    fields_def: dict,
+    mapping: Dict[str, str],
+    schema_fields: Optional[Dict[str, dict]] = None,
+) -> Dict[str, dict]:
+    """
+    确保 mapping 中定义的字段在多维表中真实存在，并尽量保持字段名与类型一致。
     
-    如果字段不存在，则根据 `fields.json` 中的类型定义自动创建。
+    如果字段不存在，则根据 `fields` 中的类型定义自动创建；
+    若本地 schema 缓存存在 field_id 且字段名变更，则尝试对飞书字段重命名。
     
     Args:
         client: 飞书客户端
@@ -226,6 +255,7 @@ def ensure_fields(client: lark.Client, app_token: str, table_id: str, fields_def
         table_id: 数据表 ID
         fields_def: `fields.json` 的完整内容
         mapping: 字段映射字典 {json_key: feishu_field_name}
+        schema_fields: 本地缓存字段映射 {json_key: {"field_id": "...", "name": "..."}}
     """
     flat_defs = {}
     for section in ["meta_fields", "analysis_fields", "attachment_fields"]:
@@ -233,16 +263,55 @@ def ensure_fields(client: lark.Client, app_token: str, table_id: str, fields_def
             flat_defs.update(fields_def[section])
 
     existing = get_existing_fields(client, app_token, table_id)
+    by_id: Dict[str, dict] = {}
+    for n, info in existing.items():
+        fid = str(info.get("id") or "").strip()
+        if not fid:
+            continue
+        by_id[fid] = {"name": n, "type": info.get("type", 0)}
+
+    schema: Dict[str, dict] = schema_fields if isinstance(schema_fields, dict) else {}
+    next_schema: Dict[str, dict] = {str(k): (v if isinstance(v, dict) else {}) for k, v in schema.items()}
 
     for json_key, fs_name in mapping.items():
-        if fs_name in existing:
-            continue
         if json_key not in flat_defs:
             continue
-        ftype = TYPE_MAPPING.get(flat_defs[json_key].get("type", "string"), FIELD_TYPE_TEXT)
-        new_id = create_field(client, app_token, table_id, fs_name, ftype)
-        if new_id:
-            existing[fs_name] = {"id": new_id, "type": ftype}
+        expected_type = TYPE_MAPPING.get(flat_defs[json_key].get("type", "string"), FIELD_TYPE_TEXT)
+        cached = next_schema.get(str(json_key)) if isinstance(next_schema.get(str(json_key)), dict) else {}
+        cached_id = str((cached or {}).get("field_id") or (cached or {}).get("id") or "").strip()
+        if cached_id and cached_id in by_id:
+            cur = by_id[cached_id]
+            cur_type = cur.get("type", 0)
+            cur_name = str(cur.get("name") or "")
+            if cur_type and int(cur_type) != int(expected_type):
+                raise ValueError(f"飞书字段类型不匹配: {fs_name} (期望 {expected_type}, 实际 {cur_type})")
+            if cur_name and cur_name != fs_name:
+                ok = update_field(client, app_token, table_id, cached_id, fs_name, expected_type)
+                if not ok:
+                    raise ValueError(f"飞书字段重命名失败: {cur_name} -> {fs_name}")
+                existing.pop(cur_name, None)
+                existing[fs_name] = {"id": cached_id, "type": expected_type}
+                by_id[cached_id] = {"name": fs_name, "type": expected_type}
+            next_schema[str(json_key)] = {"field_id": cached_id, "name": fs_name}
+            continue
+
+        if fs_name in existing:
+            actual_type = existing.get(fs_name, {}).get("type", 0)
+            if actual_type and int(actual_type) != int(expected_type):
+                raise ValueError(f"飞书字段类型不匹配: {fs_name} (期望 {expected_type}, 实际 {actual_type})")
+            fid = str(existing.get(fs_name, {}).get("id") or "").strip()
+            if fid:
+                next_schema[str(json_key)] = {"field_id": fid, "name": fs_name}
+            continue
+
+        new_id = create_field(client, app_token, table_id, fs_name, expected_type)
+        if not new_id:
+            raise ValueError(f"飞书字段创建失败: {fs_name}")
+        existing[fs_name] = {"id": new_id, "type": expected_type}
+        by_id[str(new_id)] = {"name": fs_name, "type": expected_type}
+        next_schema[str(json_key)] = {"field_id": str(new_id), "name": fs_name}
+
+    return next_schema
 
 
 def map_item(item: dict, mapping: Dict[str, str], file_token: Optional[str], fields_info: Dict[str, dict]) -> Dict[str, object]:
@@ -302,10 +371,11 @@ def map_item(item: dict, mapping: Dict[str, str], file_token: Optional[str], fie
 def upload_items(
     items: List[dict],
     config_dict: dict,
-    fields_json: str,
+    fields_json: object,
     keys: Optional[List[str]],
     skip_processed: bool,
     base_dir: str,
+    config_path: Optional[str] = None,
 ) -> Tuple[dict, List[dict]]:
     """
     批量同步条目到飞书多维表。
@@ -335,35 +405,90 @@ def upload_items(
     if not all(k in fc for k in ["app_id", "app_secret", "app_token", "table_id"]):
         raise ValueError("飞书配置不完整")
 
-    fields_path = Path(fields_json)
-    if not fields_path.is_absolute():
-        fields_path = (Path(base_dir) / fields_path).resolve()
+    req_keys = [str(k).strip() for k in (keys or []) if str(k).strip()]
 
-    with open(fields_path, "r", encoding="utf-8") as f:
-        fields_def = json.load(f)
+    fields_def: dict = {}
+    if isinstance(fields_json, dict):
+        fields_def = fields_json
+    else:
+        fields_path = Path(str(fields_json))
+        if not fields_path.is_absolute():
+            fields_path = (Path(base_dir) / fields_path).resolve()
+        with open(fields_path, "r", encoding="utf-8") as f:
+            fields_def = json.load(f)
 
     mapping: Dict[str, str] = {}
+    used_names: Dict[str, str] = {}
     for section in ["meta_fields", "analysis_fields", "attachment_fields"]:
-        for k, v in fields_def.get(section, {}).items():
-            if "feishu_field" in v:
-                mapping[k] = v["feishu_field"]
+        defs = fields_def.get(section, {})
+        if not isinstance(defs, dict):
+            continue
+        for k, v in defs.items():
+            if not isinstance(v, dict):
+                continue
+            name = str(v.get("name") or "").strip()
+            if not name:
+                raise ValueError(f"字段缺少 name: {section}.{k}")
+            if name in used_names and used_names[name] != str(k):
+                raise ValueError(f"字段 name 重复: {name} ({used_names[name]} / {k})")
+            used_names[name] = str(k)
+            mapping[str(k)] = name
+
+    schema_fields = {}
+    fc_schema = fc.get("schema", {}) if isinstance(fc.get("schema", {}), dict) else {}
+    if isinstance(fc_schema.get("fields"), dict):
+        schema_fields = fc_schema.get("fields", {})
 
     client = create_client(fc["app_id"], fc["app_secret"])
-    ensure_fields(client, fc["app_token"], fc["table_id"], fields_def, mapping)
+    next_schema = ensure_fields(client, fc["app_token"], fc["table_id"], fields_def, mapping, schema_fields=schema_fields)
+    if config_path and isinstance(next_schema, dict):
+        try:
+            save_local_config_patch(str(config_path), {"feishu": {"schema": {"fields": next_schema}}})
+        except Exception as e:
+            try:
+                import sys
+                sys.stderr.write(f"[FEISHU] ⚠ 写入 schema 缓存失败：{e}\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
     fields_info = get_existing_fields(client, fc["app_token"], fc["table_id"])
 
     zotero_dir = zotero.get_zotero_dir(config_dict)
 
     stats = {"uploaded": 0, "skipped": 0, "failed": 0}
 
+    targets_total = 0
+    for it in items:
+        if req_keys and it.get("item_key") not in req_keys:
+            continue
+        if skip_processed and (it.get("sync_status") == "synced" or it.get("processed") is True):
+            continue
+        targets_total += 1
+
+    try:
+        import sys
+        sys.stderr.write(f"[FEISHU] 开始同步：{targets_total} 条\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+    cur = 0
     for item in items:
-        if keys and item.get("item_key") not in keys:
+        if req_keys and item.get("item_key") not in req_keys:
             continue
         if skip_processed and (item.get("sync_status") == "synced" or item.get("processed") is True):
             stats["skipped"] += 1
             continue
 
         try:
+            cur += 1
+            ik = str(item.get("item_key") or "").strip()
+            try:
+                import sys
+                sys.stderr.write(f"[FEISHU] ({cur}/{targets_total}) {ik} ...\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
             ftoken = None
             pdf_path = zotero.resolve_pdf_path(item, zotero_dir, base_dir=str(base_dir))
             if pdf_path and os.path.exists(pdf_path):
@@ -372,6 +497,12 @@ def upload_items(
             fields = map_item(item, mapping, ftoken, fields_info)
             if not fields:
                 stats["failed"] += 1
+                try:
+                    import sys
+                    sys.stderr.write(f"[FEISHU] ✗ {ik} 没有可写字段，跳过\n")
+                    sys.stderr.flush()
+                except Exception:
+                    pass
                 continue
 
             record_id = item.get("record_id")
@@ -401,10 +532,29 @@ def upload_items(
                 if not record_id and resp.data and resp.data.record:
                     item["record_id"] = resp.data.record.record_id
                 stats["uploaded"] += 1
+                try:
+                    import sys
+                    sys.stderr.write(f"[FEISHU] ✓ {ik} 已同步\n")
+                    sys.stderr.flush()
+                except Exception:
+                    pass
             else:
                 stats["failed"] += 1
+                try:
+                    import sys
+                    sys.stderr.write(f"[FEISHU] ✗ {ik} 同步失败\n")
+                    sys.stderr.flush()
+                except Exception:
+                    pass
         except Exception:
             stats["failed"] += 1
+            try:
+                import sys, traceback
+                sys.stderr.write(f"[FEISHU] ✗ {str(item.get('item_key') or '').strip()} 异常：\n")
+                traceback.print_exc(file=sys.stderr)
+                sys.stderr.flush()
+            except Exception:
+                pass
 
     return stats, items
 

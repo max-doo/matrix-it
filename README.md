@@ -192,7 +192,7 @@ pip install -r backend/requirements.txt
 
 引用格式（GB/T 7714）相关依赖已包含在 `backend/requirements.txt` 中：
 - `citeproc-py`、`citeproc-py-styles`（安装后模块名分别为 `citeproc`、`citeproc_styles`）
-- `aiohttp`（用于并行 LLM 分析）
+- `aiohttp`（用于并行 LLM 分析；若缺失则 LLM 阶段会退化为串行）
 
 如需构建 sidecar 可执行文件（PyInstaller）：
 
@@ -231,6 +231,9 @@ npm run dev
 ```powershell
 .\scripts\build_sidecar.ps1
 ```
+
+> **注意**：该脚本文件需保留 UTF-8 BOM（含中文字符串时 PowerShell 5 解析更稳定）。  
+> 脚本会确保 `backend/requirements.txt` 已安装（包含 `aiohttp`），并将构建产物同步到 `src-tauri/target/*/matrixit-sidecar.exe`，避免运行时仍引用旧 sidecar。
 
 **手动构建（使用 spec 文件）：**
 
@@ -308,6 +311,14 @@ LLM 解析字段的“顺序控制”推荐使用：
 
 开启后，终端会打印 `type=debug` 的 JSON 行，包含：字段 keys 顺序、输入长度裁剪信息、请求/响应字节数、模型输出预览（截断）、解析出的键集合等。
 
+并行与诊断（终端汇总）：
+
+- 分析完成后，Tauri 会输出一行汇总：`[analysis] done ... sidecar={...}`  
+  - `sidecar.async_available=true` 表示 LLM 阶段会使用 `aiohttp + asyncio` 并发请求；为 `false` 时 LLM 阶段退化为串行。  
+  - `sidecar.aiohttp.error` 会给出 aiohttp 缺失/导入失败原因（例如 `No module named 'aiohttp'`）。  
+- 可直接自检 sidecar 打包内 aiohttp 是否可用：  
+  - `src-tauri/target/debug/matrixit-sidecar.exe diag`
+
 同步到飞书（会按 `config/config.json` 的 `fields` 自动创建字段并上传附件）：
 
 ```bash
@@ -341,6 +352,7 @@ python backend/matrixit_backend/pdf.py <pdf_path> all
   - PDF 定位策略：优先 `pdf_path`（按项目根目录解析相对路径），否则用 Zotero storage 路径
   - LLM：按 `config/config.local.json` 的 `llm.base_url/model/api_key` 调用（OpenAI-Style）
   - 并行：若 `config` 中设置 `llm.parallel_count > 1`，则启用并行加速（使用 `aiohttp + asyncio`）；实际并发会被 `llm.parallel_count_max` 与（多模态时）`llm.multimodal_parallel_count_max` 强制限制
+  - 若终端显示 `sidecar.async_available=false`，优先运行 `matrixit-sidecar.exe diag` 检查 `aiohttp` 是否打包/可用
 - 同步到飞书：
   ```bash
   python backend/matrixit_backend/sidecar.py sync_feishu "[\"<item_key>\"]"

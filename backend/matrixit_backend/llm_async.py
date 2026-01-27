@@ -20,8 +20,12 @@ from typing import Any, Callable, Dict, List, Optional
 try:
     import aiohttp
     AIOHTTP_AVAILABLE = True
-except ImportError:
+    AIOHTTP_ERROR: str | None = None
+    AIOHTTP_VERSION = getattr(aiohttp, "__version__", None)
+except Exception as e:
     AIOHTTP_AVAILABLE = False
+    AIOHTTP_ERROR = f"{type(e).__name__}: {e}"
+    AIOHTTP_VERSION = None
 
 from matrixit_backend.llm import (
     LlmError,
@@ -421,3 +425,11 @@ class AsyncLLMAnalyzer:
 def is_async_available() -> bool:
     """检查异步模块是否可用"""
     return AIOHTTP_AVAILABLE
+
+
+def get_async_diagnostic() -> Dict[str, Any]:
+    return {
+        "available": bool(AIOHTTP_AVAILABLE),
+        "version": AIOHTTP_VERSION,
+        "error": AIOHTTP_ERROR,
+    }

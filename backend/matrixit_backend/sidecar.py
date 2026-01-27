@@ -206,9 +206,12 @@ def _analyze_parallel(
     """
     import asyncio
     import os
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    import time
+    import sys
+    from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
     from matrixit_backend import llm_async
     
+    t0 = time.monotonic()
     sys.stderr.write(f"[SIDECAR] 🚀 并行模式启动，并发数: {parallel_count}\n")
     sys.stderr.flush()
     
@@ -286,8 +289,10 @@ def _analyze_parallel(
     sys.stderr.write(f"[SIDECAR] PDF 解析并发数: {pdf_workers}\n")
     sys.stderr.flush()
 
+    t_pdf_start = time.monotonic()
     futures_map = {}
-    with ProcessPoolExecutor(max_workers=pdf_workers) as executor:
+    executor_cls = ThreadPoolExecutor if getattr(sys, "frozen", False) else ProcessPoolExecutor
+    with executor_cls(max_workers=pdf_workers) as executor:
         for item_key, pdf_path in pdf_path_map.items():
             futures_map[executor.submit(pdf.extract_pdf_text, pdf_path)] = item_key
 
@@ -332,11 +337,13 @@ def _analyze_parallel(
         sys.stderr.write("[SIDECAR] 没有有效任务需要处理\n")
         sys.stderr.flush()
         return
+    t_pdf_end = time.monotonic()
     
     sys.stderr.write(f"[SIDECAR] 准备完成，共 {len(tasks_data)} 个任务\n")
     sys.stderr.flush()
     
     # 阶段 2: 并行调用 LLM
+    t_llm_start = time.monotonic()
     def on_progress(result: dict) -> None:
         """进度回调：每完成一个任务时调用"""
         item_key = result.get("item_key", "")
@@ -381,7 +388,7 @@ def _analyze_parallel(
             except Exception as e:
                 sys.stderr.write(f"[SIDECAR] ❌ Failed to save {item_key}: {e}\n")
                 sys.stderr.flush()
-            print(json.dumps({"type": "finished", "item_key": item_key}, ensure_ascii=False), flush=True)
+            print(json.dumps({"type": "finished", "item_key": item_key, "item": it}, ensure_ascii=False), flush=True)
         else:
             # 失败：恢复原始状态
             it["processed_status"] = restore_status
@@ -442,10 +449,40 @@ def _analyze_parallel(
                 on_progress({"item_key": item_key, "success": False, "error": e.message, "error_code": e.code})
             except Exception as e:
                 on_progress({"item_key": item_key, "success": False, "error": str(e), "error_code": "LLM_REQUEST_FAILED"})
+    t_llm_end = time.monotonic()
     
     # 最终导出 JSON
+    t_export_start = time.monotonic()
     try:
         storage.export_json(db_path, literature_json)
+    except Exception:
+        pass
+    t_export_end = time.monotonic()
+
+    diag = {
+        "parallel_count": int(parallel_count or 1),
+        "pdf_workers": int(pdf_workers or 1),
+        "async_available": bool(llm_async.is_async_available()),
+        "aiohttp": llm_async.get_async_diagnostic(),
+        "tasks_total": int(len(tasks_data)),
+        "timing_ms": {
+            "pdf_prepare": int((t_pdf_end - t_pdf_start) * 1000),
+            "llm": int((t_llm_end - t_llm_start) * 1000),
+            "export": int((t_export_end - t_export_start) * 1000),
+            "total": int((t_export_end - t0) * 1000),
+        },
+    }
+    try:
+        sys.stderr.write("[MATRIXIT_ANALYZE_SUMMARY] " + json.dumps(diag, ensure_ascii=False) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+    try:
+        if keys:
+            print(
+                json.dumps({"type": "debug", "item_key": str(keys[0]), "stage": "summary", "data": diag}, ensure_ascii=False),
+                flush=True,
+            )
     except Exception:
         pass
     
@@ -565,6 +602,8 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
     config = load_config(config_path)
     zotero_dir = zotero.get_zotero_dir(config)
     llm_cfg = llm.load_llm_config(config)
+    import time
+    t0 = time.monotonic()
     debug_cfg = config.get("debug", {}) if isinstance(config.get("debug", {}), dict) else {}
     default_debug = True
     debug_enabled = default_debug
@@ -622,10 +661,15 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
 
     # 检查并行配置
     parallel_count = llm_cfg.get("parallel_count", 1) if llm_cfg else 1
+    finished_count = 0
+    failed_count = 0
+    attempted_parallel = False
+    parallel_fallback: str = ""
     
     # 并行模式：parallel_count > 1 时启用
     if parallel_count > 1 and llm_cfg:
         try:
+            attempted_parallel = True
             _analyze_parallel(
                 keys=keys,
                 idx=idx,
@@ -643,9 +687,11 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             return
         except ImportError as e:
             # aiohttp 未安装，回退到串行模式
+            parallel_fallback = str(e)
             sys.stderr.write(f"[SIDECAR] 并行模式不可用 ({e})，回退到串行模式\n")
             sys.stderr.flush()
         except Exception as e:
+            parallel_fallback = str(e)
             sys.stderr.write(f"[SIDECAR] 并行模式出错 ({e})，回退到串行模式\n")
             sys.stderr.flush()
 
@@ -653,6 +699,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
     for k in keys:
         it = idx.get(str(k))
         if not it:
+            failed_count += 1
             print(
                 json.dumps(
                     {"type": "failed", "item_key": str(k), "error": "ITEM_NOT_FOUND", "error_code": "ITEM_NOT_FOUND"},
@@ -693,6 +740,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
 
         resolved_pdf, text = _analysis_resolve_pdf_and_text(it, zotero_dir, base_dir)
         if not resolved_pdf:
+            failed_count += 1
             _analysis_restore_and_emit_failed(
                 db_path=db_path,
                 literature_json=literature_json,
@@ -704,6 +752,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             continue
         emit_debug(str(k), "pdf_resolved", {"pdf_path": str(resolved_pdf)})
         if not text:
+            failed_count += 1
             _analysis_restore_and_emit_failed(
                 db_path=db_path,
                 literature_json=literature_json,
@@ -717,6 +766,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
         it["tldr"] = text.strip().replace("\n", " ")[:300]
 
         if not analysis_fields:
+            failed_count += 1
             _analysis_restore_and_emit_failed(
                 db_path=db_path,
                 literature_json=literature_json,
@@ -734,6 +784,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             continue
 
         if not llm_cfg:
+            failed_count += 1
             _analysis_restore_and_emit_failed(
                 db_path=db_path,
                 literature_json=literature_json,
@@ -795,6 +846,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
                     ensure_ascii=False,
                 )
             , flush=True)
+            failed_count += 1
             continue
         except Exception:
             # 恢复原始状态，不写入 failed
@@ -816,6 +868,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
                     ensure_ascii=False,
                 )
             , flush=True)
+            failed_count += 1
             continue
 
         ok = _analysis_apply_result(it, str(k), result, analysis_fields, emit_debug)
@@ -823,6 +876,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             returned_keys = []
             if isinstance(result, dict):
                 returned_keys = [str(x) for x in list(result.keys())[:30]]
+            failed_count += 1
             _analysis_restore_and_emit_failed(
                 db_path=db_path,
                 literature_json=literature_json,
@@ -849,7 +903,41 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
         except Exception as db_err:
             sys.stderr.write(f"[SIDECAR] ❌ Failed to save item {k}: {db_err}\n")
             sys.stderr.flush()
-        print(json.dumps({"type": "finished", "item_key": str(k)}, ensure_ascii=False), flush=True)
+        print(json.dumps({"type": "finished", "item_key": str(k), "item": it}, ensure_ascii=False), flush=True)
+        finished_count += 1
+
+    try:
+        async_available = False
+        aiohttp_diag = {"available": False, "version": None, "error": None}
+        try:
+            from matrixit_backend import llm_async
+            async_available = bool(llm_async.is_async_available())
+            aiohttp_diag = llm_async.get_async_diagnostic()
+        except Exception:
+            async_available = False
+        diag = {
+            "mode": "serial",
+            "parallel_count": int(parallel_count or 1),
+            "llm_cfg_present": bool(llm_cfg),
+            "multimodal": bool(llm_cfg.get("multimodal")) if isinstance(llm_cfg, dict) else False,
+            "async_available": async_available,
+            "aiohttp": aiohttp_diag,
+            "attempted_parallel": bool(attempted_parallel),
+            "parallel_fallback": parallel_fallback,
+            "items_total": int(len(keys)),
+            "finished": int(finished_count),
+            "failed": int(failed_count),
+            "timing_ms": {"total": int((time.monotonic() - t0) * 1000)},
+        }
+        sys.stderr.write("[MATRIXIT_ANALYZE_SUMMARY] " + json.dumps(diag, ensure_ascii=False) + "\n")
+        sys.stderr.flush()
+        if keys:
+            print(
+                json.dumps({"type": "debug", "item_key": str(keys[0]), "stage": "summary", "data": diag}, ensure_ascii=False),
+                flush=True,
+            )
+    except Exception:
+        pass
 
 
 def sync_feishu(literature_json: str, db_path: str, root_dir: str, config_path: str, fields_path: str, keys: List[str]) -> dict:
@@ -865,7 +953,15 @@ def sync_feishu(literature_json: str, db_path: str, root_dir: str, config_path: 
     config = load_config(config_path)
     items = storage.get_items(db_path)
     fields_source: object = config.get("fields") if isinstance(config.get("fields"), dict) else fields_path
-    stats, updated_items = feishu.upload_items(items, config, fields_source, keys, skip_processed=False, base_dir=str(root_dir))
+    stats, updated_items = feishu.upload_items(
+        items,
+        config,
+        fields_source,
+        keys,
+        skip_processed=False,
+        base_dir=str(root_dir),
+        config_path=config_path,
+    )
     try:
         storage.upsert_items(db_path, updated_items)
         storage.export_json(db_path, literature_json)
@@ -1080,9 +1176,14 @@ def main() -> None:
             sys.stderr.reconfigure(encoding="utf-8")
         except Exception:
             pass
+    try:
+        import multiprocessing
+        multiprocessing.freeze_support()
+    except Exception:
+        pass
 
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: sidecar.py <load_library|analyze|sync_feishu|update_item|delete_extracted_data|format_citations|clear_citations> [json_args]\n")
+        sys.stderr.write("usage: sidecar.py <diag|load_library|analyze|sync_feishu|update_item|delete_extracted_data|format_citations|clear_citations> [json_args]\n")
         sys.exit(2)
 
     cmd = sys.argv[1]
@@ -1110,6 +1211,17 @@ def main() -> None:
             storage.export_json(db_path, literature_json)
     except Exception:
         pass
+
+    if cmd == "diag":
+        payload: dict = {"frozen": bool(getattr(sys, "frozen", False)), "python": sys.version}
+        try:
+            from matrixit_backend import llm_async
+
+            payload["aiohttp"] = llm_async.get_async_diagnostic()
+        except Exception as e:
+            payload["aiohttp"] = {"available": False, "version": None, "error": f"{type(e).__name__}: {e}"}
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+        return
 
     if cmd == "load_library":
         try:

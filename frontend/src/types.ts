@@ -78,9 +78,29 @@ export type CollectionNode = {
 export type AnalysisEvent =
   | { event: 'Started'; data: { item_key: string } }
   | { event: 'Progress'; data: { item_key: string; current: number; total: number } }
-  | { event: 'Finished'; data: { item_key: string } }
+  | { event: 'Finished'; data: { item_key: string; item?: Partial<LiteratureItem> } }
   | { event: 'Failed'; data: { item_key: string; error: string } }
   | { event: 'AllDone'; data: null }
+
+export type AnalysisReportItem = {
+  item_key: string
+  started_at?: number
+  ended_at?: number
+  status: 'finished' | 'failed' | 'cancelled' | 'unknown'
+  error?: string
+}
+
+export type AnalysisReport = {
+  started_at: number
+  ended_at: number
+  duration_ms: number
+  total: number
+  finished: number
+  failed: number
+  cancelled: number
+  items: AnalysisReportItem[]
+  raw_events: AnalysisEvent[]
+}
 
 /**
  * 分析字段配置行：

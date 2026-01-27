@@ -3,9 +3,9 @@
  * 负责文献分析的启动、停止、状态更新和UI交互
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { message } from 'antd'
-import type { AnalysisEvent, LiteratureItem } from '../../types'
+import type { AnalysisEvent, AnalysisReport, AnalysisReportItem, LiteratureItem } from '../../types'
 import { startAnalysis as startAnalysisRpc, stopAnalysis as stopAnalysisRpc, deleteExtractedData as deleteExtractedDataRpc } from '../../lib/backend'
 
 export function useAnalysisState<T extends { items: LiteratureItem[] }>(
@@ -14,11 +14,14 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
     selectedRowKeys: React.Key[],
     setSelectedRowKeys: (keys: React.Key[]) => void,
     handleRefresh: () => void,
-    analysisInProgressRef: React.MutableRefObject<boolean>
+    analysisInProgressRef: React.MutableRefObject<boolean>,
+    onAnalysisReport?: (report: AnalysisReport) => void
 ) {
     const [analysisInProgress, setAnalysisInProgress] = useState(false)
     const [stoppingAnalysis, setStoppingAnalysis] = useState(false)
     const [deletingExtracted, setDeletingExtracted] = useState(false)
+    const pendingDeleteCountRef = useRef(0)
+    const deleteQueueRef = useRef(Promise.resolve())
 
     /**
      * 核心操作：启动分析
@@ -31,6 +34,55 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
         if (keys.length === 0) return
 
         const msgKey = 'analysis'
+        let closed = false
+        const startedAt = Date.now()
+        const items = new Map<string, AnalysisReportItem>()
+        const rawEvents: AnalysisEvent[] = []
+
+        const ensureItem = (k: string) => {
+            const prev = items.get(k)
+            if (prev) return prev
+            const next: AnalysisReportItem = { item_key: k, status: 'unknown' }
+            items.set(k, next)
+            return next
+        }
+
+        const formatMs = (ms: number) => {
+            const sec = Math.max(0, Math.floor(ms / 1000))
+            const m = Math.floor(sec / 60)
+            const s = sec % 60
+            return `${m}:${String(s).padStart(2, '0')}`
+        }
+
+        const closeAnalysis = () => {
+            if (closed) return
+            closed = true
+            setAnalysisInProgress(false)
+            analysisInProgressRef.current = false
+            handleRefresh()
+            const endedAt = Date.now()
+            const allItems = [...items.values()].sort((a, b) => a.item_key.localeCompare(b.item_key))
+            const finished = allItems.filter((x) => x.status === 'finished').length
+            const failed = allItems.filter((x) => x.status === 'failed').length
+            const cancelled = allItems.filter((x) => x.status === 'cancelled').length
+            const summary = `分析完成：${keys.length} 篇（成功 ${finished} / 失败 ${failed} / 取消 ${cancelled}）· 用时 ${formatMs(endedAt - startedAt)}`
+            const report: AnalysisReport = {
+                started_at: startedAt,
+                ended_at: endedAt,
+                duration_ms: endedAt - startedAt,
+                total: keys.length,
+                finished,
+                failed,
+                cancelled,
+                items: allItems,
+                raw_events: rawEvents,
+            }
+            if (onAnalysisReport) {
+                onAnalysisReport(report)
+            } else {
+                message.success({ content: summary, key: msgKey })
+            }
+        }
 
         setAnalysisInProgress(true)
         analysisInProgressRef.current = true
@@ -45,16 +97,39 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
         message.loading({ content: '正在分析…', key: msgKey, duration: 0 })
 
         const onEvent = (evt: AnalysisEvent) => {
+            rawEvents.push(evt)
+            if (evt.event === 'Started') {
+                const k = evt.data.item_key
+                const it = ensureItem(k)
+                if (!it.started_at) it.started_at = Date.now()
+            }
             if (evt.event === 'Finished') {
                 const k = evt.data.item_key
+                const patch = evt.data.item
+                const it = ensureItem(k)
+                it.ended_at = Date.now()
+                it.status = 'finished'
                 setLibrary((prev) => ({
                     ...prev,
-                    items: prev.items.map((it) => (it.item_key === k ? { ...it, processed_status: 'done', sync_status: 'unsynced' } : it))
+                    items: prev.items.map((it) => {
+                        if (it.item_key !== k) return it
+                        return {
+                            ...it,
+                            ...(patch ?? {}),
+                            item_key: it.item_key,
+                            processed_status: 'done',
+                            sync_status: 'unsynced',
+                        }
+                    })
                 }))
             }
             if (evt.event === 'Failed') {
                 const k = evt.data.item_key
                 const isCancelled = evt.data.error === 'CANCELLED'
+                const it = ensureItem(k)
+                it.ended_at = Date.now()
+                it.status = isCancelled ? 'cancelled' : 'failed'
+                it.error = evt.data.error
                 // 获取当前状态，用于判断恢复目标
                 let restoreTarget: 'done' | 'unprocessed' = 'unprocessed'
                 setLibrary((prev) => ({
@@ -85,15 +160,15 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
                 }
             }
             if (evt.event === 'AllDone') {
-                setAnalysisInProgress(false)
-                analysisInProgressRef.current = false
-                handleRefresh()
-                message.success({ content: '分析完成', key: msgKey })
+                closeAnalysis()
             }
         }
 
         try {
             await startAnalysisRpc(keys, onEvent)
+            if (analysisInProgressRef.current) {
+                closeAnalysis()
+            }
         } catch (e) {
             const msg = e instanceof Error ? e.message : '启动分析失败'
             setAnalysisInProgress(false)
@@ -106,7 +181,7 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
             }))
             message.error({ content: msg, key: msgKey })
         }
-    }, [selectedRowKeys, setLibrary, handleRefresh])
+    }, [selectedRowKeys, setLibrary, handleRefresh, analysisInProgressRef, onAnalysisReport])
 
     /**
      * 确认终止分析
@@ -166,30 +241,37 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
         setSelectedRowKeys([])
 
         // 3. 异步执行后端删除操作
+        pendingDeleteCountRef.current += 1
         setDeletingExtracted(true)
-        try {
-            const res = (await deleteExtractedDataRpc(keys)) as {
-                cleared?: number
-                missing?: number
-                analysis_fields?: number
-                feishu?: { deleted?: number; skipped?: number; failed?: number }
-            }
-            const cleared = Number(res?.cleared ?? 0)
-            const missing = Number(res?.missing ?? 0)
-            const feishuDeleted = Number(res?.feishu?.deleted ?? 0)
-            const feishuFailed = Number(res?.feishu?.failed ?? 0)
+        deleteQueueRef.current = deleteQueueRef.current
+            .catch(() => undefined)
+            .then(async () => {
+                const res = (await deleteExtractedDataRpc(keys)) as {
+                    cleared?: number
+                    missing?: number
+                    analysis_fields?: number
+                    feishu?: { deleted?: number; skipped?: number; failed?: number }
+                }
+                const cleared = Number(res?.cleared ?? 0)
+                const missing = Number(res?.missing ?? 0)
+                const feishuDeleted = Number(res?.feishu?.deleted ?? 0)
+                const feishuFailed = Number(res?.feishu?.failed ?? 0)
 
-            // 刷新同步真实状态
-            handleRefresh()
+                handleRefresh()
 
-            if (feishuFailed > 0) {
-                message.warning(`已清除 ${cleared} 条（缺失 ${missing} 条），飞书删除成功 ${feishuDeleted} 条，失败 ${feishuFailed} 条`)
-            } else {
-                message.success(`已清除 ${cleared} 条（缺失 ${missing} 条），飞书删除 ${feishuDeleted} 条`)
-            }
-        } finally {
-            setDeletingExtracted(false)
-        }
+                if (feishuFailed > 0) {
+                    message.warning(`已清除 ${cleared} 条（缺失 ${missing} 条），飞书删除成功 ${feishuDeleted} 条，失败 ${feishuFailed} 条`)
+                } else {
+                    message.success(`已清除 ${cleared} 条（缺失 ${missing} 条），飞书删除 ${feishuDeleted} 条`)
+                }
+            })
+            .finally(() => {
+                pendingDeleteCountRef.current -= 1
+                if (pendingDeleteCountRef.current <= 0) {
+                    pendingDeleteCountRef.current = 0
+                    setDeletingExtracted(false)
+                }
+            })
     }, [selectedRowKeys, setLibrary, setSelectedRowKeys, handleRefresh])
 
     return {

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 use tauri::Emitter;
 use tauri_plugin_shell::process::CommandChild;
@@ -81,6 +81,17 @@ fn ensure_sidecar_env() {
   let cfg = resolve_config_path(&root);
   std::env::set_var("MATRIXIT_WORKDIR", root.to_string_lossy().to_string());
   std::env::set_var("MATRIXIT_CONFIG", cfg.to_string_lossy().to_string());
+}
+
+fn truncate_utf8_boundary(s: &mut String, max_len: usize) {
+  if s.len() <= max_len {
+    return;
+  }
+  let mut cut = max_len;
+  while cut > 0 && !s.is_char_boundary(cut) {
+    cut -= 1;
+  }
+  s.truncate(cut);
 }
 
 #[tauri::command]
@@ -211,7 +222,7 @@ async fn format_citations(
 enum AnalysisEvent {
   Started { item_key: String },
   Progress { item_key: String, current: u32, total: u32 },
-  Finished { item_key: String },
+  Finished { item_key: String, item: Option<serde_json::Value> },
   Failed { item_key: String, error: String },
   AllDone,
 }
@@ -223,6 +234,7 @@ async fn start_analysis(
   item_keys: Vec<String>,
   on_event: Channel<AnalysisEvent>,
 ) -> Result<(), ApiError> {
+  let started_at = Instant::now();
   // 重置取消标志
   state.cancelled.store(false, Ordering::SeqCst);
   
@@ -262,19 +274,71 @@ async fn start_analysis(
   let mut current: u32 = 0;
   let mut buf = String::new();
   let mut stderr_buf = String::new();
+  let mut stderr_line_buf = String::new();
+  let mut sidecar_diag: Option<serde_json::Value> = None;
   let mut finished: HashSet<String> = HashSet::new();
   let mut failed: HashSet<String> = HashSet::new();
   let mut terminated_code: Option<i32> = None;
   let mut last_error: Option<String> = None;
   let mut was_cancelled = false;
 
-  while let Some(event) = rx.recv().await {
-    // 检查是否被取消
-    if state.cancelled.load(Ordering::SeqCst) {
-      was_cancelled = true;
-      break;
+  let mut handle_json_line = |line: &str| {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+      if let Some(item_key) = v
+        .get("item_key")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+      {
+        if v.get("type").and_then(|x| x.as_str()) == Some("started") {
+          let _ = on_event.send(AnalysisEvent::Started {
+            item_key: item_key.clone(),
+          });
+        }
+        if v.get("type").and_then(|x| x.as_str()) == Some("finished") {
+          current += 1;
+          finished.insert(item_key.clone());
+          if let Ok(mut pending) = state.pending_keys.lock() {
+            pending.remove(&item_key);
+          }
+          let _ = on_event.send(AnalysisEvent::Progress {
+            item_key: item_key.clone(),
+            current,
+            total,
+          });
+          let _ = on_event.send(AnalysisEvent::Finished {
+            item_key: item_key.clone(),
+            item: v.get("item").cloned(),
+          });
+        }
+        if v.get("type").and_then(|x| x.as_str()) == Some("failed") {
+          failed.insert(item_key.clone());
+          if let Ok(mut pending) = state.pending_keys.lock() {
+            pending.remove(&item_key);
+          }
+          let code = v
+            .get("error_code")
+            .and_then(|x| x.as_str())
+            .or_else(|| v.get("error").and_then(|x| x.as_str()))
+            .unwrap_or("unknown");
+          let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("").trim();
+          let err = if msg.is_empty() {
+            code.to_string()
+          } else {
+            format!("{}: {}", code, msg)
+          };
+          let _ = on_event.send(AnalysisEvent::Failed {
+            item_key: item_key.clone(),
+            error: err,
+          });
+        }
+        if v.get("type").and_then(|x| x.as_str()) == Some("debug") {
+          eprintln!("[analysis][{}] {}", item_key, line);
+        }
+      }
     }
+  };
 
+  while let Some(event) = rx.recv().await {
     match event {
       tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
         let chunk = String::from_utf8_lossy(&line).to_string();
@@ -289,55 +353,32 @@ async fn start_analysis(
           if line.is_empty() {
             continue;
           }
-          if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-            if let Some(item_key) = v.get("item_key").and_then(|x| x.as_str()).map(|s| s.to_string()) {
-              if v.get("type").and_then(|x| x.as_str()) == Some("started") {
-                let _ = on_event.send(AnalysisEvent::Started { item_key: item_key.clone() });
-              }
-              if v.get("type").and_then(|x| x.as_str()) == Some("finished") {
-                current += 1;
-                finished.insert(item_key.clone());
-                // 从 pending 中移除已完成的
-                if let Ok(mut pending) = state.pending_keys.lock() {
-                  pending.remove(&item_key);
-                }
-                let _ = on_event.send(AnalysisEvent::Progress { item_key: item_key.clone(), current, total });
-                let _ = on_event.send(AnalysisEvent::Finished { item_key: item_key.clone() });
-              }
-              if v.get("type").and_then(|x| x.as_str()) == Some("failed") {
-                failed.insert(item_key.clone());
-                // 从 pending 中移除已失败的
-                if let Ok(mut pending) = state.pending_keys.lock() {
-                  pending.remove(&item_key);
-                }
-                let code = v
-                  .get("error_code")
-                  .and_then(|x| x.as_str())
-                  .or_else(|| v.get("error").and_then(|x| x.as_str()))
-                  .unwrap_or("unknown");
-                let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("").trim();
-                let err = if msg.is_empty() {
-                  code.to_string()
-                } else {
-                  format!("{}: {}", code, msg)
-                };
-                let _ = on_event.send(AnalysisEvent::Failed { item_key: item_key.clone(), error: err });
-              }
-              if v.get("type").and_then(|x| x.as_str()) == Some("debug") {
-                println!("[analysis][{}] {}", item_key, line);
-              }
-            }
-          }
+          handle_json_line(line);
         }
       }
       tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
         let chunk = String::from_utf8_lossy(&line).to_string();
         // 实时打印 stderr 到控制台，方便调试
         eprint!("{}", chunk);
+        stderr_line_buf.push_str(&chunk);
+        while let Some(pos) = stderr_line_buf.find('\n') {
+          let mut line = stderr_line_buf[..pos].to_string();
+          stderr_line_buf = stderr_line_buf[pos + 1..].to_string();
+          if line.ends_with('\r') {
+            line.pop();
+          }
+          let trimmed = line.trim();
+          if let Some(rest) = trimmed.strip_prefix("[MATRIXIT_ANALYZE_SUMMARY]") {
+            let raw = rest.trim();
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+              sidecar_diag = Some(v);
+            }
+          }
+        }
         if stderr_buf.len() < 8000 {
           stderr_buf.push_str(&chunk);
           if stderr_buf.len() > 8000 {
-            stderr_buf.truncate(8000);
+            truncate_utf8_boundary(&mut stderr_buf, 8000);
           }
         }
       }
@@ -348,6 +389,26 @@ async fn start_analysis(
         terminated_code = payload.code;
       }
       _ => {}
+    }
+
+    if state.cancelled.load(Ordering::SeqCst) {
+      was_cancelled = true;
+      break;
+    }
+  }
+
+  let remaining = buf.trim();
+  if !remaining.is_empty() {
+    handle_json_line(remaining);
+  }
+  let remaining_err = stderr_line_buf.trim();
+  if !remaining_err.is_empty() {
+    let trimmed = remaining_err.trim();
+    if let Some(rest) = trimmed.strip_prefix("[MATRIXIT_ANALYZE_SUMMARY]") {
+      let raw = rest.trim();
+      if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+        sidecar_diag = Some(v);
+      }
     }
   }
 
@@ -372,6 +433,13 @@ async fn start_analysis(
       pending.clear();
     }
     let _ = on_event.send(AnalysisEvent::AllDone);
+    eprintln!(
+      "[analysis] done total={} finished={} failed={} cancelled=true dur_ms={}",
+      total,
+      finished.len(),
+      failed.len(),
+      started_at.elapsed().as_millis()
+    );
     return Ok(());
   }
 
@@ -403,6 +471,14 @@ async fn start_analysis(
       pending.clear();
     }
     let _ = on_event.send(AnalysisEvent::AllDone);
+    eprintln!(
+      "[analysis] done total={} finished={} failed={} cancelled=false dur_ms={} err={}",
+      total,
+      finished.len(),
+      failed.len(),
+      started_at.elapsed().as_millis(),
+      err.replace('\n', " | ")
+    );
     return Err(ApiError::new("ANALYZE_FAILED", err));
   }
   
@@ -411,6 +487,24 @@ async fn start_analysis(
     pending.clear();
   }
   let _ = on_event.send(AnalysisEvent::AllDone);
+  if let Some(v) = sidecar_diag {
+    eprintln!(
+      "[analysis] done total={} finished={} failed={} cancelled=false dur_ms={} sidecar={}",
+      total,
+      finished.len(),
+      failed.len(),
+      started_at.elapsed().as_millis(),
+      v
+    );
+  } else {
+    eprintln!(
+      "[analysis] done total={} finished={} failed={} cancelled=false dur_ms={}",
+      total,
+      finished.len(),
+      failed.len(),
+      started_at.elapsed().as_millis()
+    );
+  }
   Ok(())
 }
 
@@ -476,24 +570,58 @@ fn stop_analysis(state: tauri::State<AnalysisState>) -> Result<serde_json::Value
 #[tauri::command]
 async fn sync_feishu(app: tauri::AppHandle, item_keys: Vec<String>) -> Result<serde_json::Value, ApiError> {
   ensure_sidecar_env();
-  let output = app
+  let cmd = app
     .shell()
     .sidecar("matrixit-sidecar")
     .map_err(|e| ApiError::new("SIDE_CAR_NOT_FOUND", e.to_string()))?
     .arg("sync_feishu")
-    .arg(serde_json::to_string(&item_keys).map_err(|e| ApiError::new("JSON", e.to_string()))?)
-    .output()
-    .await
-    .map_err(|e| ApiError::new("SIDE_CAR_EXEC_FAILED", e.to_string()))?;
+    .arg(serde_json::to_string(&item_keys).map_err(|e| ApiError::new("JSON", e.to_string()))?);
 
-  if !output.status.success() {
-    return Err(ApiError::new(
-      "SIDE_CAR_NON_ZERO",
-      String::from_utf8_lossy(&output.stderr).to_string(),
-    ));
+  let (mut rx, _child) = cmd
+    .spawn()
+    .map_err(|e| ApiError::new("SIDE_CAR_SPAWN_FAILED", e.to_string()))?;
+
+  let mut out_buf: Vec<u8> = Vec::new();
+  let mut stderr_buf = String::new();
+  let mut terminated_code: Option<i32> = None;
+  let mut last_error: Option<String> = None;
+
+  while let Some(event) = rx.recv().await {
+    match event {
+      tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
+        out_buf.extend_from_slice(&line);
+      }
+      tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
+        let chunk = String::from_utf8_lossy(&line).to_string();
+        eprint!("{}", chunk);
+        if stderr_buf.len() < 8000 {
+          stderr_buf.push_str(&chunk);
+          if stderr_buf.len() > 8000 {
+            truncate_utf8_boundary(&mut stderr_buf, 8000);
+          }
+        }
+      }
+      tauri_plugin_shell::process::CommandEvent::Error(err) => {
+        last_error = Some(err);
+      }
+      tauri_plugin_shell::process::CommandEvent::Terminated(payload) => {
+        terminated_code = payload.code;
+        break;
+      }
+      _ => {}
+    }
   }
 
-  let stdout = String::from_utf8(output.stdout).map_err(|e| ApiError::new("UTF8", e.to_string()))?;
+  if let Some(err) = last_error {
+    return Err(ApiError::new("SIDE_CAR_ERROR", err));
+  }
+  if let Some(code) = terminated_code {
+    if code != 0 {
+      return Err(ApiError::new("SIDE_CAR_NON_ZERO", stderr_buf));
+    }
+  }
+
+  let stdout = String::from_utf8(out_buf).map_err(|e| ApiError::new("UTF8", e.to_string()))?;
   let v: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| ApiError::new("JSON", e.to_string()))?;
   Ok(v)
 }

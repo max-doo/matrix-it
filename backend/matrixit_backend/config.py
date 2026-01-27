@@ -61,3 +61,31 @@ def load_config(config_path: str) -> Dict[str, Any]:
                 config[k] = v
 
     return config
+
+
+def _deep_merge_dict(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+    for k, v in src.items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _deep_merge_dict(dst[k], v)
+        else:
+            dst[k] = v
+    return dst
+
+
+def save_local_config_patch(config_path: str, patch: Dict[str, Any]) -> None:
+    """
+    将 patch 写入同目录下的 config.local.json（深度合并）。
+    """
+    base_dir = os.path.dirname(os.path.abspath(config_path))
+    local_path = os.path.join(base_dir, "config.local.json")
+    local_cfg: Dict[str, Any] = {}
+    if os.path.exists(local_path):
+        with open(local_path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+            if isinstance(obj, dict):
+                local_cfg = obj
+    if not isinstance(local_cfg, dict):
+        local_cfg = {}
+    _deep_merge_dict(local_cfg, patch)
+    with open(local_path, "w", encoding="utf-8") as f:
+        json.dump(local_cfg, f, ensure_ascii=False, indent=2)

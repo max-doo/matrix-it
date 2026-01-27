@@ -191,11 +191,7 @@ export async function stopAnalysis(): Promise<{ stopped: boolean; cancelled_coun
  * 注意：失败兜底会返回全 0，UI 无法区分“确实为 0”还是“调用失败兜底为 0”。
  */
 export async function syncFeishu(itemKeys: string[]) {
-  try {
-    return await invoke('sync_feishu', { itemKeys })
-  } catch {
-    return { uploaded: 0, failed: 0, skipped: 0 }
-  }
+  return await invoke('sync_feishu', { itemKeys })
 }
 
 /**

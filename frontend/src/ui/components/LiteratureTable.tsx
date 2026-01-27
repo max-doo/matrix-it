@@ -73,20 +73,25 @@ const truncateText = (text: string, maxLen: number) => {
  * 根据处理状态（ProcessingStatus）和同步状态（SyncStatus）生成对应的 Antd Badge 属性。
  */
 const getStatusBadge = (
+  view: LiteratureTableView,
   processed: ProcessingStatus,
   sync: LiteratureItem['sync_status'],
   error?: string
 ): { status: BadgeProps['status']; text: string; color?: string } => {
+  if (view === 'matrix') {
+    if (processed !== 'done') return { status: 'default', text: '-', color: 'default' }
+    if (sync === 'syncing') return { status: 'processing', text: '同步中', color: 'blue' }
+    return sync === 'synced'
+      ? { status: 'success', text: '已同步', color: 'green' }
+      : { status: 'warning', text: '待同步', color: 'orange' }
+  }
   if (processed === 'processing') return { status: 'processing', text: '分析中', color: 'blue' }
   if (processed === 'reanalyzing') return { status: 'processing', text: '重新分析中', color: 'orange' }
   if (processed === 'failed') {
     const reason = typeof error === 'string' && error.trim().length > 0 ? truncateText(error, 24) : ''
     return { status: 'error', text: reason ? `失败 · ${reason}` : '失败', color: 'red' }
   }
-  if (processed === 'done')
-    return sync === 'synced'
-      ? { status: 'success', text: '已分析 · 已同步', color: 'green' }
-      : { status: 'success', text: '已分析', color: 'cyan' }
+  if (processed === 'done') return { status: 'success', text: '已分析', color: 'cyan' }
   return { status: 'default', text: '未分析', color: 'default' }
 }
 
@@ -179,7 +184,7 @@ export function LiteratureTable({
   onSortedDataChange,
   activeItemKey,
 }: LiteratureTableProps) {
-  const showStatus = view === 'zotero'
+  const showStatus = true
   const fixedWidthCols = useMemo(() => new Set(['author', 'year', 'type', 'bib_type']), [])
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -222,6 +227,12 @@ export function LiteratureTable({
     const sorted = [...data].sort((a, b) => {
       // 特殊处理状态列
       if (key === STATUS_KEY) {
+        if (view === 'matrix') {
+          const syncOrder: Record<NonNullable<LiteratureItem['sync_status']>, number> = { unsynced: 0, syncing: 0.5, synced: 1 }
+          const av = syncOrder[a.sync_status] ?? 0
+          const bv = syncOrder[b.sync_status] ?? 0
+          return av - bv
+        }
         const statusOrder: Record<ProcessingStatus, number> = { unprocessed: 0, processing: 1, reanalyzing: 1.5, done: 2, failed: 3 }
         const av = statusOrder[a.processed_status] ?? 0
         const bv = statusOrder[b.processed_status] ?? 0
@@ -235,7 +246,7 @@ export function LiteratureTable({
       return as.localeCompare(bs, 'zh-Hans-CN')
     })
     return order === 'descend' ? sorted.reverse() : sorted
-  }, [data, sortState])
+  }, [data, sortState, view])
 
   // 当排序后的数据变化时，通知父组件
   useEffect(() => {
@@ -740,12 +751,16 @@ export function LiteratureTable({
       const statusCol: ProColumns<LiteratureItem> | null = showStatus
         ? {
           key: STATUS_KEY,
-          title: '状态',
+          title: view === 'matrix' ? '同步' : '状态',
           dataIndex: STATUS_KEY,
           width: getColCssVar(STATUS_KEY),
           onCell: () => ({ style: { minWidth: getMinWidth(STATUS_KEY) } }),
           fixed: 'right',
           sorter: (a, b) => {
+            if (view === 'matrix') {
+              const order: Record<NonNullable<LiteratureItem['sync_status']>, number> = { unsynced: 0, syncing: 0.5, synced: 1 }
+              return (order[a.sync_status] ?? 0) - (order[b.sync_status] ?? 0)
+            }
             const order: Record<ProcessingStatus, number> = { unprocessed: 0, processing: 1, reanalyzing: 1.5, done: 2, failed: 3 }
             return (order[a.processed_status] ?? 0) - (order[b.processed_status] ?? 0)
           },
@@ -759,7 +774,7 @@ export function LiteratureTable({
             onResizeStart: startResize(STATUS_KEY),
           } as unknown as ResizableHeaderCellProps),
           render: (_, record) => {
-            const badge = getStatusBadge(record.processed_status, record.sync_status, record.processed_error)
+            const badge = getStatusBadge(view, record.processed_status, record.sync_status, record.processed_error)
             // 状态文字着色：使用 AntD 预设颜色对应的 CSS 颜色，或者直接使用 style
             const colorMap: Record<string, string> = {
               blue: '#1677ff',
