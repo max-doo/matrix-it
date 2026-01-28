@@ -58,11 +58,15 @@ export function useFilterState(activeView: string) {
  */
 export function useCollectionItems(library: { items: LiteratureItem[] }, activeCollectionKey: string | null) {
     return useMemo(() => {
+        const isAnnotation = (it: LiteratureItem) => {
+            const t = String(it.type ?? it.item_type ?? '').trim().toLowerCase()
+            return t === 'annotation'
+        }
         return activeCollectionKey
             ? library.items.filter((it) =>
                 (it.collections ?? []).some((c) => c.key === activeCollectionKey || c.pathKeyChain?.includes(activeCollectionKey))
             )
-            : library.items
+            : library.items.filter((it) => !isAnnotation(it))
     }, [activeCollectionKey, library.items])
 }
 

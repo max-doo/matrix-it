@@ -4,6 +4,7 @@
  *           兼容 Tauri 环境与浏览器环境（Mock/LocalStorage兜底）。
  */
 import { Channel, invoke } from '@tauri-apps/api/core'
+import { openPath as openerOpenPath } from '@tauri-apps/plugin-opener'
 import type { AnalysisEvent, CollectionNode, LiteratureItem } from '../types'
 import { loadLibraryMock } from './mock'
 
@@ -83,6 +84,49 @@ export async function openExternal(rawUrl: string): Promise<{ opened: boolean }>
     return { opened: !!win }
   } catch {
     return { opened: false }
+  }
+}
+
+export async function openPath(rawPath: string): Promise<{ opened: boolean }> {
+  const path = String(rawPath || '').trim()
+  if (!path) return { opened: false }
+  if (isTauriRuntime()) {
+    try {
+      await openerOpenPath(path)
+      return { opened: true }
+    } catch (e) {
+      throw normalizeInvokeError(e)
+    }
+  }
+  try {
+    const win = window.open(path, '_blank', 'noreferrer')
+    return { opened: !!win }
+  } catch {
+    return { opened: false }
+  }
+}
+
+export async function resolvePdfPath(itemKey: string): Promise<string> {
+  const key = String(itemKey || '').trim()
+  if (!key) return ''
+  if (!isTauriRuntime()) return ''
+  try {
+    const res = await invoke<string>('resolve_pdf_path', { itemKey: key })
+    return typeof res === 'string' ? res : ''
+  } catch (e) {
+    throw normalizeInvokeError(e)
+  }
+}
+
+export async function openPdfInBrowser(pdfPath: string): Promise<{ opened: boolean }> {
+  const path = String(pdfPath || '').trim()
+  if (!path) return { opened: false }
+  if (!isTauriRuntime()) return { opened: false }
+  try {
+    await invoke('open_pdf_in_browser', { pdfPath: path })
+    return { opened: true }
+  } catch (e) {
+    throw normalizeInvokeError(e)
   }
 }
 

@@ -10,6 +10,7 @@ LLM 调用封装（后端分析链路的最小实现）。
 
 import base64
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.error import HTTPError, URLError
@@ -219,6 +220,47 @@ def _safe_preview(text: str, max_len: int = 220) -> str:
     return s[: max_len - 1] + "…"
 
 
+def _trace_enabled() -> bool:
+    v = str(os.environ.get("MATRIXIT_LLM_TRACE") or "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    return True
+
+
+def _trace_user_max_chars() -> int:
+    raw = str(os.environ.get("MATRIXIT_LLM_TRACE_USER_MAX") or "").strip()
+    try:
+        n = int(raw)
+        return max(0, n)
+    except Exception:
+        return 2000
+
+
+def _truncate_user_messages(messages: List[dict], max_chars: int) -> tuple[List[dict], List[dict]]:
+    if max_chars <= 0:
+        max_chars = 0
+    out: List[dict] = []
+    meta: List[dict] = []
+    for idx, msg in enumerate(messages or []):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "user" and isinstance(content, str):
+            total = len(content)
+            truncated = total > max_chars
+            out_msg = dict(msg)
+            out_msg["content"] = content if not truncated else content[:max_chars]
+            out.append(out_msg)
+            meta.append({"index": idx, "total_chars": total, "truncated": truncated})
+        else:
+            out.append(dict(msg))
+    return out, meta
+
+
+
 def chat_json(
     llm_cfg: dict,
     messages: List[dict],
@@ -274,19 +316,44 @@ def chat_json(
     sys.stderr.flush()
     
     if debug:
-        try:
-            debug(
-                {
-                    "api": "chat_completions",
-                    "url": _safe_base_url(url),
-                    "model": llm_cfg.get("model"),
-                    "timeout_s": llm_cfg.get("timeout_s"),
-                    "temperature": llm_cfg.get("temperature"),
-                    "payload_bytes": len(data),
+        trace_on = _trace_enabled()
+        if trace_on:
+            try:
+                user_max = _trace_user_max_chars()
+                truncated_messages, trunc_meta = _truncate_user_messages(messages, user_max)
+                safe_headers = {
+                    "Content-Type": "application/json",
+                    "User-Agent": "MatrixIt/1.0.0",
                 }
-            )
-        except Exception:
-            pass
+                debug(
+                    {
+                        "step": "request",
+                        "api": "chat_completions",
+                        "url": _safe_base_url(url),
+                        "model": llm_cfg.get("model"),
+                        "timeout_s": llm_cfg.get("timeout_s"),
+                        "temperature": llm_cfg.get("temperature"),
+                        "headers": safe_headers,
+                        "payload": {**payload, "messages": truncated_messages},
+                        "user_truncation": {"max_chars": user_max, "items": trunc_meta},
+                    }
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                debug(
+                    {
+                        "api": "chat_completions",
+                        "url": _safe_base_url(url),
+                        "model": llm_cfg.get("model"),
+                        "timeout_s": llm_cfg.get("timeout_s"),
+                        "temperature": llm_cfg.get("temperature"),
+                        "payload_bytes": len(data),
+                    }
+                )
+            except Exception:
+                pass
     req = Request(
         url=url,
         data=data,
@@ -306,15 +373,32 @@ def chat_json(
             sys.stderr.write(f"[LLM] Response size: {len(raw)} bytes\n")
             sys.stderr.flush()
             if debug:
-                try:
-                    debug(
-                        {
-                            "status": status,
-                            "response_bytes": len(raw),
-                        }
-                    )
-                except Exception:
-                    pass
+                trace_on = _trace_enabled()
+                if trace_on:
+                    try:
+                        debug(
+                            {
+                                "step": "response",
+                                "api": "chat_completions",
+                                "url": _safe_base_url(url),
+                                "model": llm_cfg.get("model"),
+                                "status": status,
+                                "response_bytes": len(raw),
+                                "response_text": body,
+                            }
+                        )
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        debug(
+                            {
+                                "status": status,
+                                "response_bytes": len(raw),
+                            }
+                        )
+                    except Exception:
+                        pass
     except HTTPError as e:
         # 读取错误响应体
         error_body = ""
@@ -365,7 +449,9 @@ def chat_json(
     
     if debug:
         try:
-            debug({"content_preview": _safe_preview(content_str), "content_chars": len(content_str)})
+            trace_on = _trace_enabled()
+            if not trace_on:
+                debug({"content_preview": _safe_preview(content_str), "content_chars": len(content_str)})
         except Exception:
             pass
     parsed = _extract_json(content_str)
@@ -376,7 +462,11 @@ def chat_json(
     
     if debug:
         try:
-            debug({"parsed_keys": list(parsed.keys())})
+            trace_on = _trace_enabled()
+            payload = {"parsed_keys": list(parsed.keys())}
+            if trace_on:
+                payload["step"] = "parsed"
+            debug(payload)
         except Exception:
             pass
     return parsed

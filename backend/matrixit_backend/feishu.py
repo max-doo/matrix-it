@@ -53,6 +53,33 @@ TYPE_MAPPING = {
 FEISHU_META_DEFAULT_ORDER = ["title", "author", "year", "type", "publications", "abstract", "tags", "collections", "url", "doi"]
 FEISHU_META_FIXED_KEYS = {"title", "author", "year", "publications"}
 
+LITERATURE_TYPE_LABELS_ZH: Dict[str, str] = {
+    "journalArticle": "期刊文章",
+    "thesis": "学位论文",
+    "conferencePaper": "会议论文",
+    "book": "图书",
+    "bookSection": "图书章节",
+    "report": "报告",
+    "webpage": "网页",
+    "preprint": "预印本",
+    "patent": "专利",
+    "blogPost": "博客",
+    "videoRecording": "视频",
+    "podcast": "播客",
+    "presentation": "演示文稿",
+    "statute": "法规",
+    "newspaperArticle": "报纸文章",
+}
+
+
+def map_literature_type_to_zh(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    key = value.strip()
+    if not key:
+        return value
+    return LITERATURE_TYPE_LABELS_ZH.get(key) or value
+
 
 def parse_bitable_url(url: str) -> Tuple[Optional[str], Optional[str]]:
     """
@@ -280,7 +307,10 @@ def create_field(client: lark.Client, app_token: str, table_id: str, name: str, 
     resp = client.bitable.v1.app_table_field.create(req)
     if resp.success() and resp.data and resp.data.field:
         return resp.data.field.field_id
-    return None
+    code = getattr(resp, "code", None)
+    msg = getattr(resp, "msg", None)
+    log_id = resp.get_log_id() if hasattr(resp, "get_log_id") else None
+    raise RuntimeError(f"create_field failed: name={name} type={ftype} code={code} msg={msg} log_id={log_id}")
 
 
 def update_field(client: lark.Client, app_token: str, table_id: str, field_id: str, name: str, ftype: int) -> bool:
@@ -309,6 +339,7 @@ def ensure_fields(
     fields_def: dict,
     mapping: Dict[str, str],
     schema_fields: Optional[Dict[str, dict]] = None,
+    ordered_json_keys: Optional[List[str]] = None,
 ) -> Dict[str, dict]:
     """
     确保 mapping 中定义的字段在多维表中真实存在，并尽量保持字段名与类型一致。
@@ -340,7 +371,11 @@ def ensure_fields(
     schema: Dict[str, dict] = schema_fields if isinstance(schema_fields, dict) else {}
     next_schema: Dict[str, dict] = {str(k): (v if isinstance(v, dict) else {}) for k, v in schema.items()}
 
-    for json_key, fs_name in mapping.items():
+    iter_keys: List[str] = [str(k) for k in ordered_json_keys] if isinstance(ordered_json_keys, list) else list(mapping.keys())
+    for json_key in iter_keys:
+        fs_name = mapping.get(json_key)
+        if not fs_name:
+            continue
         if json_key not in flat_defs:
             continue
         expected_type = TYPE_MAPPING.get(flat_defs[json_key].get("type", "string"), FIELD_TYPE_TEXT)
@@ -371,9 +406,20 @@ def ensure_fields(
                 next_schema[str(json_key)] = {"field_id": fid, "name": fs_name}
             continue
 
-        new_id = create_field(client, app_token, table_id, fs_name, expected_type)
-        if not new_id:
-            raise ValueError(f"飞书字段创建失败: {fs_name}")
+        try:
+            new_id = create_field(client, app_token, table_id, fs_name, expected_type)
+        except Exception as e:
+            if int(expected_type) == int(FIELD_TYPE_ATTACHMENT):
+                try:
+                    import sys
+                    sys.stderr.write(f"[FEISHU] ⚠ 附件字段无法自动创建，将跳过附件同步：{e}\n")
+                    sys.stderr.flush()
+                except Exception:
+                    pass
+                mapping.pop(str(json_key), None)
+                next_schema.pop(str(json_key), None)
+                continue
+            raise
         existing[fs_name] = {"id": new_id, "type": expected_type}
         by_id[str(new_id)] = {"name": fs_name, "type": expected_type}
         next_schema[str(json_key)] = {"field_id": str(new_id), "name": fs_name}
@@ -430,6 +476,9 @@ def map_item(item: dict, mapping: Dict[str, str], file_token: Optional[str], fie
 
         if val is None or val == "":
             continue
+
+        if jk == "type":
+            val = map_literature_type_to_zh(val)
 
         ftype = fields_info.get(fk, {}).get("type", 0)
         if ftype == FIELD_TYPE_MULTI_SELECT:
@@ -494,6 +543,7 @@ def upload_items(
     fc = get_feishu_config(config_dict)
     if not all(k in fc for k in ["app_id", "app_secret", "app_token", "table_id"]):
         raise ValueError("飞书配置不完整")
+    base_sig = f"{str(fc.get('app_token') or '').strip()}:{str(fc.get('table_id') or '').strip()}"
 
     req_keys = [str(k).strip() for k in (keys or []) if str(k).strip()]
     if not isinstance(base_dir, str):
@@ -616,16 +666,36 @@ def upload_items(
             if isinstance(k, str) and isinstance(v, dict):
                 _add_mapping("attachment_fields", k, v)
 
+    ordered_json_keys: List[str] = []
+    seen_keys = set()
+    for k in meta_keys_ordered:
+        if k in mapping and k not in seen_keys:
+            ordered_json_keys.append(k)
+            seen_keys.add(k)
+    for k in analysis_keys_ordered:
+        if k in mapping and k not in seen_keys:
+            ordered_json_keys.append(k)
+            seen_keys.add(k)
+    if attachment_enabled:
+        for k in attachment_defs.keys():
+            ks = str(k or "").strip()
+            if ks in mapping and ks not in seen_keys:
+                ordered_json_keys.append(ks)
+                seen_keys.add(ks)
+
     schema_fields = {}
     fc_schema = fc.get("schema", {}) if isinstance(fc.get("schema", {}), dict) else {}
+    cached_base_sig = str(fc_schema.get("base_sig") or "").strip()
+    if cached_base_sig and cached_base_sig != base_sig:
+        fc_schema = {}
     if isinstance(fc_schema.get("fields"), dict):
         schema_fields = fc_schema.get("fields", {})
 
     client = create_client(fc["app_id"], fc["app_secret"])
-    next_schema = ensure_fields(client, fc["app_token"], fc["table_id"], fields_def, mapping, schema_fields=schema_fields)
+    next_schema = ensure_fields(client, fc["app_token"], fc["table_id"], fields_def, mapping, schema_fields=schema_fields, ordered_json_keys=ordered_json_keys)
     if config_path and isinstance(next_schema, dict):
         try:
-            save_local_config_patch(str(config_path), {"feishu": {"schema": {"fields": next_schema}}})
+            save_local_config_patch(str(config_path), {"feishu": {"schema": {"base_sig": base_sig, "fields": next_schema}}})
         except Exception as e:
             try:
                 import sys
@@ -809,6 +879,9 @@ def upload_items(
             if resp.success():
                 item["sync_status"] = "synced"
                 item["processed"] = True
+                item["feishu_app_token"] = str(fc.get("app_token") or "").strip() or None
+                item["feishu_table_id"] = str(fc.get("table_id") or "").strip() or None
+                item["feishu_base_sig"] = base_sig
                 if not record_id and resp.data and resp.data.record:
                     item["record_id"] = resp.data.record.record_id
                 if pending_file_token:
@@ -879,6 +952,10 @@ def batch_get_records(config_dict: dict, record_ids: List[str]) -> dict:
         if not resp.success():
             code = getattr(resp, "code", None)
             msg = getattr(resp, "msg", None)
+            if str(msg or "") == "RolePermNotAllow" or int(code or 0) in (1254302, 2001254302):
+                raise RuntimeError(
+                    f"batch_get failed: code={code} msg={msg}（新多维表格未授予应用权限：请在飞书中将应用添加为协作者/授予编辑权限，或检查高级权限角色）"
+                )
             raise RuntimeError(f"batch_get failed: code={code} msg={msg}")
         data = getattr(resp, "data", None)
         if data and getattr(data, "records", None):

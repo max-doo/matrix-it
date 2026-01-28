@@ -212,12 +212,32 @@ def read_items(conn: sqlite3.Connection, collections: Dict[int, dict]) -> List[d
                     att_path = att_path[8:]
                 attachments.append({"key": att_key, "filename": att_path})
 
+        title_value = metadata.get("title", "") or ""
+        if item_type == "statute":
+            title_value = title_value or metadata.get("nameOfAct", "") or metadata.get("caseName", "") or ""
+
+        publisher_value = metadata.get("publisher", "") or ""
+        if item_type == "report":
+            institution_value = metadata.get("institution", "") or ""
+            if institution_value and institution_value.lower() not in publisher_value.lower():
+                publisher_value = f"{publisher_value} / {institution_value}" if publisher_value else institution_value
+
+        publications_value = (
+            metadata.get("publicationTitle", "")
+            or metadata.get("proceedingsTitle", "")
+            or metadata.get("bookTitle", "")
+        )
+        if item_type == "conferencePaper":
+            conference_name_value = metadata.get("conferenceName", "") or ""
+            if conference_name_value and conference_name_value.lower() not in publications_value.lower():
+                publications_value = f"{publications_value} / {conference_name_value}" if publications_value else conference_name_value
+
         meta_extra = {
             "date": metadata.get("date", ""),
             "volume": metadata.get("volume", ""),
             "issue": metadata.get("issue", ""),
             "pages": metadata.get("pages", ""),
-            "publisher": metadata.get("publisher", ""),
+            "publisher": publisher_value,
             "place": metadata.get("place", ""),
             "publicationTitle": metadata.get("publicationTitle", ""),
             "bookTitle": metadata.get("bookTitle", ""),
@@ -243,13 +263,11 @@ def read_items(conn: sqlite3.Connection, collections: Dict[int, dict]) -> List[d
                 "item_key": item_key,
                 "item_type": item_type,
                 "date_modified": date_modified,
-                "title": metadata.get("title", ""),
+                "title": title_value,
                 "author": ", ".join([c["name"] for c in creators if c["type"] == "author"]),
                 "year": metadata.get("date", "")[:4] if metadata.get("date") else "",
                 "type": item_type,
-                "publications": metadata.get("publicationTitle", "")
-                or metadata.get("proceedingsTitle", "")
-                or metadata.get("bookTitle", ""),
+                "publications": publications_value,
                 "citation": "",
                 "abstract": metadata.get("abstractNote", ""),
                 "doi": metadata.get("DOI", ""),

@@ -21,86 +21,86 @@ export const DEFAULT_ANALYSIS_ORDER: string[] = [
   'key_findings',
   'contribution',
   'highlights',
-  'inspiration',
   'limitations',
+  'inspiration',
 ]
 
 export const DEFAULT_ANALYSIS_FIELDS: DefaultAnalysisFieldRow[] = [
   {
-    key: 'tldr',
-    name: 'TLDR',
-    rule: 'A',
-    type: 'string',
-    description: '高度准确概括文献的主要内容',
+    "key": "tldr",
+    "name": "TLDR",
+    "rule": "A",
+    "type": "string",
+    "description": "用一段话极度精炼地概括本文的‘背景-问题-方法-结果-结论’。要求逻辑连贯，字数控制在100-200字之间，**不做分点**，但需包含核心信息密度。"
   },
   {
-    key: 'key_word',
-    name: '关键词',
-    rule: 'A',
-    type: 'multi_select',
-    description: '提取论文的关键词（如为英文须翻译成中文，专用缩写除外），用逗号隔开',
+    "key": "key_word",
+    "name": "关键词",
+    "rule": "A",
+    "type": "multi_select",
+    "description": "提取核心关键词，示例：关键词1，关键词2，关键词3。要求：1. 英文文献必须翻译为标准的中文专业术语；2. 仅保留通用缩写（如LLM, DNA），否则全称译出；3. 输出为逗号分隔的字符串。"
   },
   {
-    key: 'bib_type',
-    name: '文献类型',
-    rule: 'A',
-    type: 'select',
-    description: '根据文献的内容判断文献的类型，如：研究论文，方法论论文，综述论文，案例研究，研究报告，行业指南等。只能输入一种最佳的类型，禁止出现多种类型。',
+    "key": "bib_type",
+    "name": "文献类型",
+    "rule": "A",
+    "type": "select",
+    "description": "基于全文特征，从以下列表中严格选择**最匹配的一项**：[实证研究 / 综述论文 / 理论构建 / 方法论论文 / 案例研究 / 技术报告 / 行业白皮书]。如果都不符合可创造新分类。"
   },
   {
-    key: 'research_question',
-    name: '研究问题',
-    rule: 'A',
-    type: 'string',
-    description: '这篇文章试图回答的核心问题是什么？或要实现的主要目标是什么？(引用必须紧跟在每个要点之后)',
+    "key": "research_question",
+    "name": "研究问题",
+    "rule": "A",
+    "type": "string",
+    "description": "分点概括：\n• 核心目标：本文试图解决的具体痛点或填补的空白。\n• 假设/问题：具体的研究假设（Hypothesis）或探究的具体问题（RQ）。"
   },
   {
-    key: 'methods',
-    name: '研究方法',
-    rule: 'A',
-    type: 'string',
-    description: '简明扼要地描述研究范式、对象、工具和分析方法(引用必须紧跟在每个要点之后)',
+    "key": "methods",
+    "name": "研究方法",
+    "rule": "A",
+    "type": "string",
+    "description": "按以下维度分点描述（如某维度缺失则跳过）：\n• 研究设计：如实验、准实验、纵向研究等；\n• 对象/数据：样本量、数据来源、筛选标准；\n• 工具/模型：使用的核心算法、分析方法、量表或设备；\n• 过程：关键的处理或干预步骤。"
   },
   {
-    key: 'logic',
-    name: '论证逻辑',
-    rule: 'A',
-    type: 'string',
-    description: '文章用怎样的逻辑来论证其论点？(引用必须紧跟在每个要点之后)',
+    "key": "logic",
+    "name": "论证逻辑",
+    "rule": "A",
+    "type": "string",
+    "description": "复盘作者的推导链条：\n• 起点：从什么现象/理论出发？\n• 过程：如何通过证据A导出结论B？\n• 终点：最终如何回归到核心论点？请分步骤简述其推理路径。"
   },
   {
-    key: 'key_findings',
-    name: '关键发现',
-    rule: 'A',
-    type: 'string',
-    description: '较详细地说明其最核心的理论/方法论/发现。(引用必须紧跟在每个要点之后)',
+    "key": "key_findings",
+    "name": "关键发现",
+    "rule": "A",
+    "type": "string",
+    "description": "列出3-5个最重要的结论。要求：\n• 必须包含具体的量化数据（如有），如“准确率提升5%”而非“准确率有所提升”；\n• 区分主要发现与次要发现；\n• 必须分点陈述。"
   },
   {
-    key: 'contribution',
-    name: '贡献',
-    rule: 'A',
-    type: 'string',
-    description: '本文对该领域最重要的理论、方法或实践贡献是什么？(引用必须紧跟在每个要点之后)',
+    "key": "contribution",
+    "name": "贡献",
+    "rule": "A",
+    "type": "string",
+    "description": "可以分两方面总结：\n• 理论贡献：对现有知识体系的修正或补充；\n• 实践/应用贡献：对实际工程或行业的具体指导意义。"
   },
   {
-    key: 'highlights',
-    name: '亮点',
-    rule: 'B',
-    type: 'string',
-    description: '论文的优点和创新之处（以资深领域专家的口吻）',
+    "key": "highlights",
+    "name": "亮点",
+    "rule": "B",
+    "type": "string",
+    "description": "（专家视角）挖掘论文的“高光时刻”：\n• 选题是否新颖？\n• 方法是否有独创性改进？\n• 视角是否独特？\n请分点列出具体的创新细节。"
   },
   {
-    key: 'inspiration',
-    name: '启发',
-    rule: 'B',
-    type: 'string',
-    description: '以独立视角分析这篇文章在理论、方法、选题等方面可能带来的具体启发，并设想未来可能的研究方向',
+    "key": "limitations",
+    "name": "局限",
+    "rule": "B",
+    "type": "string",
+    "description": "必须分两类严格分点：\n1. 【作者自陈】：原文Discussion中承认的不足；\n2. 【专家批判】：作者未提及底部局限，从以下5个维度挖掘原文未提及的硬伤：\n1. 方法论缺陷：样本代表性、控制变量缺失、基准测试不公或实验设计的系统性偏差；\n2. 逻辑漏洞：是否存在循环论证、过度泛化（Over-generalization）或逻辑跳跃；\n3. 理论局限：理论是否过时、应用是否牵强或忽视了竞争性理论；\n4. 证据薄弱：数据可靠性存疑、单一证据来源或图表误导；\n5. 创新不足：是否“旧瓶装新酒”或夸大贡献。\n\n注意：输出必须犀利、具体，拒绝客套。"
   },
   {
-    key: 'limitations',
-    name: '局限',
-    rule: 'B',
-    type: 'string',
-    description: '作为顶级的同行评审专家，不仅要总结作者自己承认的局限（需引用原文），还必须独立找出原文中未提及的深层问题',
-  },
+    "key": "inspiration",
+    "name": "启发",
+    "rule": "B",
+    "type": "string",
+    "description": "1.作者建议的研究方向；\n2.以专家视角分析这篇文章在理论、方法、选题等方面可能带来的具体启发，设想未来针对该领域可能的研究方向。"
+  }
 ]

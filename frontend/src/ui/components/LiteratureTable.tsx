@@ -266,6 +266,16 @@ export function LiteratureTable({
     if (!sortState.key) return data
     const { key, order } = sortState
     const sorted = [...data].sort((a, b) => {
+      if (key === TITLE_KEY) {
+        const at = String(a.title ?? '').trim()
+        const bt = String(b.title ?? '').trim()
+        const ae = at.length === 0
+        const be = bt.length === 0
+        if (ae && be) return 0
+        if (ae) return 1
+        if (be) return -1
+        return at.localeCompare(bt, 'zh-Hans-CN')
+      }
       // 特殊处理状态列
       if (key === STATUS_KEY) {
         if (view === 'matrix') {
@@ -659,7 +669,16 @@ export function LiteratureTable({
           },
         }),
         fixed: 'left',
-        sorter: (a, b) => (a.title || '').localeCompare(b.title || '', 'zh-Hans-CN'),
+        sorter: (a, b) => {
+          const at = String(a.title ?? '').trim()
+          const bt = String(b.title ?? '').trim()
+          const ae = at.length === 0
+          const be = bt.length === 0
+          if (ae && be) return 0
+          if (ae) return 1
+          if (be) return -1
+          return at.localeCompare(bt, 'zh-Hans-CN')
+        },
         defaultSortOrder: sortState.key === TITLE_KEY ? sortState.order : undefined,
         sortOrder: sortState.key === TITLE_KEY ? sortState.order : undefined,
         sortDirections: ['ascend', 'descend', 'ascend'],
@@ -782,8 +801,14 @@ export function LiteratureTable({
               return <span className="secondary-color">-</span>
             }
             if (Array.isArray(v)) {
-              const text = v.filter(Boolean).join(', ') || '-'
-              return <span className="secondary-color">{shouldHighlight ? highlightText(text) : text}</span>
+              const parts = v.map((x) => String(x ?? '').trim()).filter(Boolean)
+              if (parts.length === 0) return <span className="secondary-color">-</span>
+              const text = parts.map((x) => `• ${x}`).join('\n')
+              return (
+                <div className="secondary-color whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                  {shouldHighlight ? highlightText(text) : text}
+                </div>
+              )
             }
             if (typeof v === 'object') {
               const text = JSON.stringify(v)

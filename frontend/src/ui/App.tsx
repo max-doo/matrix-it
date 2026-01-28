@@ -321,9 +321,10 @@ export default function App() {
   )
   const { saveMatrixPatch } = useItemUpdater(setLibrary)
 
-  const handleSelectCollection = useCallback((key: string) => {
+  const handleSelectCollection = useCallback((key: string | null) => {
     setActiveCollectionKey(key)
-    writeString(STORAGE_KEYS.ACTIVE_COLLECTION, key)
+    if (key) writeString(STORAGE_KEYS.ACTIVE_COLLECTION, key)
+    else deleteKey(STORAGE_KEYS.ACTIVE_COLLECTION)
   }, [])
 
   const requestOpenDetail = useCallback(
@@ -754,6 +755,7 @@ export default function App() {
               {mode === 'workbench' ? (
                 <AppSidebar
                   collections={library.collections}
+                  items={library.items}
                   activeKey={activeCollectionKey}
                   onSelect={handleSelectCollection}
                   zoteroStatus={zoteroStatus}

@@ -4,9 +4,9 @@
  *           支持在 Matrix 视图下编辑分析字段，并提供上下篇切换导航。
  */
 import { CloseOutlined, LeftOutlined, ReadOutlined, RightOutlined } from '@ant-design/icons'
-import { App, Button, Descriptions, Drawer, Space, Tag, Typography, Input } from 'antd'
+import { App, Button, Descriptions, Drawer, Space, Tag, Typography, Input, Tooltip } from 'antd'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { openExternal } from '../../lib/backend'
+import { openExternal, openPath, openPdfInBrowser, resolvePdfPath } from '../../lib/backend'
 import type { LiteratureItem } from '../../types'
 import { formatAuthor, getLiteratureTypeMeta } from '../utils/ui-formatters'
 
@@ -242,8 +242,15 @@ export function LiteratureDetailDrawer({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [canEdit, handleSave, isEditing, saving])
 
+  const itemKey = item?.item_key ?? ''
   const doi = toText((item as Record<string, unknown> | null)?.doi)
   const url = toText((item as Record<string, unknown> | null)?.url)
+  const rawPdfPath = toText((item as Record<string, unknown> | null)?.pdf_path).trim()
+  const attachments = useMemo(() => {
+    const raw = (item as Record<string, unknown> | null)?.attachments
+    if (!Array.isArray(raw)) return []
+    return raw
+  }, [item])
   const abstract = toText(
     (item as Record<string, unknown> | null)?.abstract ??
     (item as Record<string, unknown> | null)?.abstractNote ??
@@ -258,6 +265,11 @@ export function LiteratureDetailDrawer({
     if (rawDoi) return `https://doi.org/${rawDoi}`
     return ''
   }, [doi, url])
+  const hasPdfAttachment = useMemo(() => {
+    if (rawPdfPath) return true
+    return attachments.length > 0
+  }, [attachments.length, rawPdfPath])
+  const readOriginalDisabled = !hasPdfAttachment && !originalHref
   const citationUi = useMemo(() => {
     if (citationState?.loading) return { kind: 'loading' as const, text: '生成中...' }
     if (citationState?.error) return { kind: 'error' as const, text: `生成失败：${citationState.error}` }
@@ -307,6 +319,58 @@ export function LiteratureDetailDrawer({
     if (await confirmDiscardIfDirty()) onNext()
   }, [confirmDiscardIfDirty, onNext])
 
+  const handleOpenOriginal = useCallback(async () => {
+    if (!item) return
+    if (hasPdfAttachment) {
+      try {
+        if (itemKey) {
+          const pdfPath = await resolvePdfPath(itemKey)
+          if (pdfPath) {
+            let openErr: unknown = null
+            try {
+              const opened = await openPath(pdfPath)
+              if (opened.opened) return
+            } catch (e) {
+              openErr = e
+            }
+            try {
+              const opened = await openPdfInBrowser(pdfPath)
+              if (opened.opened) return
+            } catch (e) {
+              modal.error({ title: '打开失败', content: e instanceof Error ? e.message : String(e) })
+              return
+            }
+            modal.error({
+              title: '打开失败',
+              content: openErr instanceof Error ? openErr.message : '无法打开 PDF（系统未返回成功）。',
+            })
+            return
+          }
+        }
+        modal.error({ title: '打开失败', content: '没有解析到可用的 PDF 路径。' })
+        return
+      } catch (e) {
+        modal.error({ title: '打开失败', content: e instanceof Error ? e.message : String(e) })
+        return
+      }
+    }
+    if (!originalHref) {
+      modal.info({ title: '提示', content: '没有附件' })
+      return
+    }
+    try {
+      await openExternal(originalHref)
+    } catch (e) {
+      modal.error({ title: '打开失败', content: e instanceof Error ? e.message : String(e) })
+    }
+  }, [hasPdfAttachment, item, itemKey, modal, originalHref])
+
+  const readOriginalButton = (
+    <Button icon={<ReadOutlined />} onClick={() => void handleOpenOriginal()} disabled={readOriginalDisabled}>
+      阅读原文
+    </Button>
+  )
+
   return (
     <Drawer
       title={null}
@@ -355,16 +419,13 @@ export function LiteratureDetailDrawer({
                     {item.processed_status !== 'done' ? '未分析' : '查看矩阵分析'}
                   </Button>
                 ) : null}
-                <Button
-                  icon={<ReadOutlined />}
-                  onClick={() => {
-                    if (!originalHref) return
-                    openExternal(originalHref).catch(() => { })
-                  }}
-                  disabled={!originalHref}
-                >
-                  阅读原文
-                </Button>
+                {readOriginalDisabled ? (
+                  <Tooltip title="没有附件">
+                    <span className="inline-block">{readOriginalButton}</span>
+                  </Tooltip>
+                ) : (
+                  readOriginalButton
+                )}
                 {canEdit ? (
                   <>
                     {isEditing ? (
@@ -510,7 +571,7 @@ export function LiteratureDetailDrawer({
                         const v = Array.isArray(raw)
                           ? (() => {
                             const parts = raw.map((x) => String(x || '').trim()).filter(Boolean)
-                            return f.type === 'multi_select' ? parts.join(', ') : parts.join('\n')
+                            return f.type === 'multi_select' ? parts.join(', ') : parts.map((x) => `• ${x}`).join('\n')
                           })()
                           : toText(raw).trim()
                         if (!v) return null

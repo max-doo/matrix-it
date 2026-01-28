@@ -173,6 +173,23 @@ th:hover .matrixit-col-resizer::before {
   margin-inline-start: 0;
 }
 
+.app-sidebar-tree .ant-tree-node-content-wrapper {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.app-sidebar-tree .ant-tree-iconEle {
+  flex: 0 0 auto;
+}
+
+.app-sidebar-tree .ant-tree-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
 .primary-color {
   color: var(--primary-color);
 }

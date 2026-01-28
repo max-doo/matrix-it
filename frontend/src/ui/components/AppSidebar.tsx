@@ -2,17 +2,19 @@
  * 模块名称: 侧边栏组件
  * 功能描述: 显示文献库的文件夹（Collections）树状结构，支持搜索过滤、展开/折叠，以及底部的 Zotero 连接状态显示。
  */
-import { useEffect, useMemo, useState } from 'react'
-import { Tree, Input, Empty, Button, Tooltip } from 'antd'
+import { useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { Tree, Input, Button, Tooltip } from 'antd'
 import type { TreeDataNode } from 'antd'
 import { FolderOutlined, FolderOpenOutlined, SettingOutlined, SyncOutlined, InfoCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import { openExternal } from '../../lib/backend'
-import type { CollectionNode } from '../../types'
+import type { CollectionNode, LiteratureItem } from '../../types'
+import { buildCollectionItemIndex, fuzzySubsequenceMatch, normalizeSearchText } from '../lib/collectionUtils'
 
 interface AppSidebarProps {
   collections: CollectionNode[]
+  items: LiteratureItem[]
   activeKey: string | null
-  onSelect: (key: string) => void
+  onSelect: (key: string | null) => void
   zoteroStatus: { path: string; connected: boolean }
   refreshState?: { refreshing: boolean; error?: string | null; lastUpdatedAt?: number | null }
   onRefresh?: () => void
@@ -20,6 +22,8 @@ interface AppSidebarProps {
 }
 
 const { Search } = Input
+
+const LIBRARY_ROOT_KEY = '__library_root__'
 
 const formatUpdatedAt = (ts: number) => {
   try {
@@ -37,10 +41,14 @@ const formatUpdatedAt = (ts: number) => {
   }
 }
 
-export function AppSidebar({ collections, activeKey, onSelect, zoteroStatus, refreshState, onRefresh, onSettings }: AppSidebarProps) {
+export function AppSidebar({ collections, items, activeKey, onSelect, zoteroStatus, refreshState, onRefresh, onSettings }: AppSidebarProps) {
   const [searchValue, setSearchValue] = useState('')
+  const deferredSearchValue = useDeferredValue(searchValue)
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([])
   const [autoExpandParent, setAutoExpandParent] = useState(true)
+
+  const normalizedQuery = useMemo(() => normalizeSearchText(deferredSearchValue), [deferredSearchValue])
+  const { titleIndex, countByKey } = useMemo(() => buildCollectionItemIndex(items), [items])
 
   // 将集合树拍平成 key 列表：用于“搜索时强制展开全部节点”，避免每次渲染重复递归遍历
   const allCollectionKeys = useMemo(() => {
@@ -52,27 +60,56 @@ export function AppSidebar({ collections, activeKey, onSelect, zoteroStatus, ref
       }
       return keys
     }
-    return loop(collections)
+    return [LIBRARY_ROOT_KEY, ...loop(collections)]
   }, [collections])
+
+  const matchedCollectionKeys = useMemo(() => {
+    if (!normalizedQuery) return new Set<string>()
+    const out = new Set<string>()
+
+    for (const row of titleIndex) {
+      if (!row.titleNorm) continue
+      if (!fuzzySubsequenceMatch(row.titleNorm, normalizedQuery)) continue
+      for (const k of row.collectionKeys) out.add(k)
+    }
+
+    const stack = [...collections]
+    while (stack.length) {
+      const n = stack.pop()
+      if (!n) continue
+      if (fuzzySubsequenceMatch(normalizeSearchText(n.name), normalizedQuery)) out.add(n.key)
+      if (Array.isArray(n.children) && n.children.length) stack.push(...n.children)
+    }
+
+    return out
+  }, [collections, normalizedQuery, titleIndex])
+
+  const filteredCollections = useMemo(() => {
+    if (!normalizedQuery) return collections
+    const loop = (nodes: CollectionNode[]): CollectionNode[] => {
+      const out: CollectionNode[] = []
+      for (const n of nodes) {
+        const children = Array.isArray(n.children) && n.children.length ? loop(n.children) : []
+        if (matchedCollectionKeys.has(n.key) || children.length > 0) {
+          out.push({ ...n, children })
+        }
+      }
+      return out
+    }
+    return loop(collections)
+  }, [collections, matchedCollectionKeys, normalizedQuery])
 
   const treeData = useMemo(() => {
     const loop = (data: CollectionNode[]): TreeDataNode[] =>
       data.map((item) => {
-        const strTitle = item.name as string
-        const index = strTitle.indexOf(searchValue)
-        const beforeStr = strTitle.substring(0, index)
-        const afterStr = strTitle.slice(index + searchValue.length)
-        // 搜索高亮：仅在命中时将命中片段包裹为高亮样式
-        const title =
-          index > -1 ? (
-            <span>
-              {beforeStr}
-              <span className="primary-color font-bold">{searchValue}</span>
-              {afterStr}
-            </span>
-          ) : (
-            <span>{strTitle}</span>
-          )
+        const isMatched = normalizedQuery.length > 0 && matchedCollectionKeys.has(item.key)
+        const count = countByKey.get(item.key) ?? 0
+        const title = (
+          <span className="inline-flex w-full min-w-0 items-center gap-2">
+            <span className={`min-w-0 truncate ${isMatched ? 'primary-color font-bold' : ''}`.trim()}>{item.name}</span>
+            <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-slate-400 tabular-nums">{count}</span>
+          </span>
+        )
 
         if (item.children) {
           return {
@@ -88,11 +125,21 @@ export function AppSidebar({ collections, activeKey, onSelect, zoteroStatus, ref
           icon: <FolderOutlined />
         }
       })
-    return loop(collections)
-  }, [collections, searchValue])
+    return [
+      {
+        title: <span>我的文献库</span>,
+        key: LIBRARY_ROOT_KEY,
+        children: loop(filteredCollections),
+        icon: (props: { expanded?: boolean }) => (props.expanded ? <FolderOpenOutlined /> : <FolderOutlined />),
+        switcherIcon: null,
+      },
+    ]
+  }, [filteredCollections, matchedCollectionKeys, normalizedQuery])
 
   const onExpand = (newExpandedKeys: React.Key[]) => {
-    setExpandedKeys(newExpandedKeys)
+    const next = new Set<React.Key>(newExpandedKeys)
+    next.add(LIBRARY_ROOT_KEY)
+    setExpandedKeys(Array.from(next))
     setAutoExpandParent(false)
   }
 
@@ -160,21 +207,25 @@ export function AppSidebar({ collections, activeKey, onSelect, zoteroStatus, ref
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 custom-scrollbar">
-        {collections.length > 0 ? (
-          <Tree
-            showIcon
-            onExpand={onExpand}
-            expandedKeys={expandedKeys}
-            autoExpandParent={autoExpandParent}
-            onSelect={(keys) => keys[0] && onSelect(keys[0] as string)}
-            selectedKeys={activeKey ? [activeKey] : []}
-            treeData={treeData}
-            blockNode
-            className="bg-transparent"
-          />
-        ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无集合" />
-        )}
+        <Tree
+          showIcon
+          onExpand={onExpand}
+          expandedKeys={expandedKeys}
+          autoExpandParent={autoExpandParent}
+          onSelect={(keys) => {
+            const k = keys[0]
+            if (!k) return
+            if (k === LIBRARY_ROOT_KEY) {
+              onSelect(null)
+              return
+            }
+            onSelect(String(k))
+          }}
+          selectedKeys={[activeKey ?? LIBRARY_ROOT_KEY]}
+          treeData={treeData}
+          blockNode
+          className="bg-transparent app-sidebar-tree"
+        />
       </div>
 
       <div className="p-4">

@@ -583,6 +583,20 @@ def load_library(literature_json: str, db_path: str, root_dir: str, config_path:
     return {"collections": collections_tree, "items": merged}
 
 
+def resolve_pdf_path(db_path: str, root_dir: str, config_path: str, item_key: str) -> dict:
+    config = load_config(config_path)
+    zotero_dir = zotero.get_zotero_dir(config)
+    it = storage.get_item(db_path, str(item_key))
+    if not it:
+        return {"pdf_path": "", "error": {"code": "ITEM_NOT_FOUND", "message": str(item_key)}}
+    base_dir = str(Path(root_dir).resolve())
+    try:
+        resolved = zotero.resolve_pdf_path(it, zotero_dir, base_dir=base_dir) or ""
+        return {"pdf_path": str(resolved)}
+    except Exception as e:
+        return {"pdf_path": "", "error": {"code": "RESOLVE_PDF_PATH_FAILED", "message": str(e)}}
+
+
 def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str, fields_path: str, keys: List[str]) -> None:
     """
     [IPC 命令] 分析文献条目（LLM 提取）。
@@ -618,6 +632,36 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
     print_prompts = True
     if isinstance(debug_cfg.get("print_prompts"), bool):
         print_prompts = bool(debug_cfg.get("print_prompts"))
+
+    llm_trace = True
+    if isinstance(debug_cfg.get("llm_trace"), bool):
+        llm_trace = bool(debug_cfg.get("llm_trace"))
+    env_llm_trace = str(os.environ.get("MATRIXIT_LLM_TRACE") or "").strip().lower()
+    if env_llm_trace in ("1", "true", "yes", "on"):
+        llm_trace = True
+    if env_llm_trace in ("0", "false", "no", "off"):
+        llm_trace = False
+
+    llm_trace_user_max_chars = 500
+    if isinstance(debug_cfg.get("llm_trace_user_max_chars"), (int, float, str)):
+        try:
+            llm_trace_user_max_chars = int(debug_cfg.get("llm_trace_user_max_chars"))
+        except Exception:
+            llm_trace_user_max_chars = 500
+    env_llm_trace_user_max = str(os.environ.get("MATRIXIT_LLM_TRACE_USER_MAX") or "").strip()
+    if env_llm_trace_user_max:
+        try:
+            llm_trace_user_max_chars = int(env_llm_trace_user_max)
+        except Exception:
+            pass
+    if llm_trace_user_max_chars < 0:
+        llm_trace_user_max_chars = 0
+
+    if not debug_enabled:
+        llm_trace = False
+
+    os.environ["MATRIXIT_LLM_TRACE"] = "1" if llm_trace else "0"
+    os.environ["MATRIXIT_LLM_TRACE_USER_MAX"] = str(llm_trace_user_max_chars)
 
     def emit_debug(item_key: str, stage: str, data: dict) -> None:
         if not debug_enabled:
@@ -987,11 +1031,17 @@ def reconcile_feishu(
     keys: List[str],
 ) -> dict:
     config = load_config(config_path)
+    fc = feishu.get_feishu_config(config)
+    cur_app_token = str(fc.get("app_token") or "").strip()
+    cur_table_id = str(fc.get("table_id") or "").strip()
+    cur_base_sig = f"{cur_app_token}:{cur_table_id}" if cur_app_token and cur_table_id else ""
     items_idx = storage.get_items_index(db_path)
     req_keys = [str(k).strip() for k in (keys or []) if str(k).strip()]
     targets: List[dict] = []
+    reset_items: List[dict] = []
     record_ids: List[str] = []
     key_by_record_id: Dict[str, str] = {}
+    reset_mismatch = 0
 
     for k, it in items_idx.items():
         if req_keys and str(k) not in req_keys:
@@ -1000,17 +1050,36 @@ def reconcile_feishu(
             continue
         if it.get("processed_status") != "done":
             continue
+        if it.get("sync_status") != "synced":
+            continue
+        it_sig = str(it.get("feishu_base_sig") or "").strip()
+        it_app = str(it.get("feishu_app_token") or "").strip()
+        it_tid = str(it.get("feishu_table_id") or "").strip()
+        if cur_base_sig and ((it_sig and it_sig != cur_base_sig) or (it_app and it_app != cur_app_token) or (it_tid and it_tid != cur_table_id)):
+            it["sync_status"] = "unsynced"
+            it.pop("record_id", None)
+            it.pop("feishu_base_sig", None)
+            it.pop("feishu_app_token", None)
+            it.pop("feishu_table_id", None)
+            reset_mismatch += 1
+            reset_items.append(it)
+            continue
         rid = str(it.get("record_id") or "").strip()
         if not rid:
-            continue
-        if it.get("sync_status") != "synced":
             continue
         targets.append(it)
         record_ids.append(rid)
         key_by_record_id[rid] = str(k)
 
+    if reset_mismatch:
+        try:
+            storage.upsert_items(db_path, reset_items)
+            storage.export_json(db_path, literature_json)
+        except Exception:
+            pass
+
     if not record_ids:
-        return {"checked": 0, "missing_remote": 0, "marked_unsynced": 0, "forbidden": 0}
+        return {"checked": 0, "missing_remote": 0, "marked_unsynced": int(reset_mismatch), "forbidden": 0}
 
     res = feishu.batch_get_records(config, record_ids)
     absent = set([str(x) for x in res.get("absent", []) if str(x).strip()])
@@ -1036,7 +1105,7 @@ def reconcile_feishu(
     return {
         "checked": len(record_ids),
         "missing_remote": len(absent),
-        "marked_unsynced": marked,
+        "marked_unsynced": marked + int(reset_mismatch),
         "forbidden": len(forbidden),
     }
 
@@ -1272,7 +1341,7 @@ def main() -> None:
         pass
 
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: sidecar.py <diag|load_library|analyze|sync_feishu|update_item|get_items|delete_extracted_data|format_citations|clear_citations> [json_args]\n")
+        sys.stderr.write("usage: sidecar.py <diag|load_library|resolve_pdf_path|analyze|sync_feishu|update_item|get_items|delete_extracted_data|format_citations|clear_citations> [json_args]\n")
         sys.exit(2)
 
     cmd = sys.argv[1]
@@ -1317,6 +1386,18 @@ def main() -> None:
             payload = load_library(literature_json, db_path, str(root_dir), config_path, fields_path)
         except Exception as e:
             payload = {"collections": [], "items": [], "error": {"code": "LOAD_LIBRARY_FAILED", "message": str(e)}}
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+        return
+
+    if cmd == "resolve_pdf_path":
+        if len(sys.argv) < 3:
+            sys.stderr.write("resolve_pdf_path requires: item_key\n")
+            sys.exit(2)
+        item_key = str(sys.argv[2] or "").strip()
+        try:
+            payload = resolve_pdf_path(db_path, str(root_dir), config_path, item_key)
+        except Exception as e:
+            payload = {"pdf_path": "", "error": {"code": "RESOLVE_PDF_PATH_FAILED", "message": str(e)}}
         sys.stdout.write(json.dumps(payload, ensure_ascii=False))
         return
 

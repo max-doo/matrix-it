@@ -42,6 +42,8 @@ export type LiteratureItem = {
   title: string
   author: string
   year: string | number
+  type?: string
+  item_type?: string
   collections?: CollectionRef[]
   pdf_path?: string
   record_id?: string

@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import sys
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -36,6 +36,45 @@ from matrixit_backend.llm import (
     _safe_base_url,
     _safe_preview,
 )
+
+def _trace_enabled() -> bool:
+    v = str(os.environ.get("MATRIXIT_LLM_TRACE") or "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    return True
+
+
+def _trace_user_max_chars() -> int:
+    raw = str(os.environ.get("MATRIXIT_LLM_TRACE_USER_MAX") or "").strip()
+    try:
+        n = int(raw)
+        return max(0, n)
+    except Exception:
+        return 2000
+
+
+def _truncate_user_messages(messages: List[dict], max_chars: int) -> tuple[List[dict], List[dict]]:
+    if max_chars <= 0:
+        max_chars = 0
+    out: List[dict] = []
+    meta: List[dict] = []
+    for idx, msg in enumerate(messages or []):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "user" and isinstance(content, str):
+            total = len(content)
+            truncated = total > max_chars
+            out_msg = dict(msg)
+            out_msg["content"] = content if not truncated else content[:max_chars]
+            out.append(out_msg)
+            meta.append({"index": idx, "total_chars": total, "truncated": truncated})
+        else:
+            out.append(dict(msg))
+    return out, meta
 
 
 class AsyncLLMAnalyzer:
@@ -99,17 +138,43 @@ class AsyncLLMAnalyzer:
             "Authorization": f"Bearer {llm_cfg['api_key']}",
             "User-Agent": "MatrixIt/1.0.0",
         }
-        
+
+        trace_on = _trace_enabled()
         if debug:
-            try:
-                debug({
-                    "api": "chat_completions_async",
-                    "url": _safe_base_url(url),
-                    "model": llm_cfg.get("model"),
-                    "item_key": item_key,
-                })
-            except Exception:
-                pass
+            if trace_on:
+                try:
+                    user_max = _trace_user_max_chars()
+                    truncated_messages, trunc_meta = _truncate_user_messages(messages, user_max)
+                    safe_headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+                    debug(
+                        {
+                            "step": "request",
+                            "api": "chat_completions_async",
+                            "url": _safe_base_url(url),
+                            "model": llm_cfg.get("model"),
+                            "item_key": item_key,
+                            "headers": safe_headers,
+                            "payload": {**payload, "messages": truncated_messages},
+                            "user_truncation": {
+                                "max_chars": user_max,
+                                "items": trunc_meta,
+                            },
+                        }
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    debug(
+                        {
+                            "api": "chat_completions_async",
+                            "url": _safe_base_url(url),
+                            "model": llm_cfg.get("model"),
+                            "item_key": item_key,
+                        }
+                    )
+                except Exception:
+                    pass
         
         try:
             async with session.post(url, json=payload, headers=headers) as resp:
@@ -120,10 +185,27 @@ class AsyncLLMAnalyzer:
                     raise LlmError("LLM_HTTP_ERROR", f"模型请求失败: HTTP {status} - {body[:200]}")
                 
                 if debug:
-                    try:
-                        debug({"status": status, "response_bytes": len(body), "item_key": item_key})
-                    except Exception:
-                        pass
+                    if trace_on:
+                        try:
+                            debug(
+                                {
+                                    "step": "response",
+                                    "api": "chat_completions_async",
+                                    "url": _safe_base_url(url),
+                                    "model": llm_cfg.get("model"),
+                                    "item_key": item_key,
+                                    "status": status,
+                                    "response_bytes": len(body),
+                                    "response_text": body,
+                                }
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            debug({"status": status, "response_bytes": len(body), "item_key": item_key})
+                        except Exception:
+                            pass
         except aiohttp.ClientError as e:
             raise LlmError("LLM_NETWORK_ERROR", f"模型网络请求失败: {e}") from e
         except asyncio.TimeoutError:
@@ -140,16 +222,19 @@ class AsyncLLMAnalyzer:
             raise LlmError("LLM_RESPONSE_MISSING", "模型响应缺少 choices/message/content") from e
         
         content_str = str(content)
-        if debug:
+        if debug and not trace_on:
             try:
                 debug({"content_preview": _safe_preview(content_str), "content_chars": len(content_str), "item_key": item_key})
             except Exception:
                 pass
-        
+
         parsed = _extract_json(content_str)
         if debug:
             try:
-                debug({"parsed_keys": list(parsed.keys()), "item_key": item_key})
+                payload = {"parsed_keys": list(parsed.keys()), "item_key": item_key}
+                if trace_on:
+                    payload["step"] = "parsed"
+                debug(payload)
             except Exception:
                 pass
         
@@ -198,18 +283,71 @@ class AsyncLLMAnalyzer:
         }
 
         if debug:
-            try:
-                debug(
-                    {
-                        "api": "responses_async",
-                        "url": _safe_base_url(url),
-                        "model": llm_cfg.get("model"),
-                        "item_key": item_key,
-                        "pdf_bytes": size,
-                    }
-                )
-            except Exception:
-                pass
+            trace_on = _trace_enabled()
+            if trace_on:
+                try:
+                    safe_headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+                    user_max = _trace_user_max_chars()
+                    safe_user = user_content if len(user_content) <= user_max else user_content[:user_max]
+                    safe_payload = dict(payload)
+                    safe_input = []
+                    for part in payload.get("input", []):
+                        if not isinstance(part, dict):
+                            continue
+                        if part.get("role") == "user":
+                            safe_part = dict(part)
+                            safe_content = []
+                            for c in part.get("content", []):
+                                if not isinstance(c, dict):
+                                    continue
+                                if c.get("type") == "input_file":
+                                    safe_content.append(
+                                        {
+                                            "type": "input_file",
+                                            "filename": p.name,
+                                            "pdf_bytes": size,
+                                            "file_data": "<<omitted>>",
+                                        }
+                                    )
+                                elif c.get("type") == "input_text":
+                                    safe_content.append({"type": "input_text", "text": safe_user})
+                                else:
+                                    safe_content.append(dict(c))
+                            safe_part["content"] = safe_content
+                            safe_input.append(safe_part)
+                        else:
+                            safe_input.append(dict(part))
+                    safe_payload["input"] = safe_input
+                    debug(
+                        {
+                            "step": "request",
+                            "api": "responses_async",
+                            "url": _safe_base_url(url),
+                            "model": llm_cfg.get("model"),
+                            "item_key": item_key,
+                            "headers": safe_headers,
+                            "payload": safe_payload,
+                            "user_truncation": {
+                                "max_chars": user_max,
+                                "items": [{"total_chars": len(user_content), "truncated": len(user_content) > user_max}],
+                            },
+                        }
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    debug(
+                        {
+                            "api": "responses_async",
+                            "url": _safe_base_url(url),
+                            "model": llm_cfg.get("model"),
+                            "item_key": item_key,
+                            "pdf_bytes": size,
+                        }
+                    )
+                except Exception:
+                    pass
 
         try:
             async with session.post(url, json=payload, headers=headers) as resp:
@@ -218,10 +356,28 @@ class AsyncLLMAnalyzer:
                 if status >= 400:
                     raise LlmError("LLM_HTTP_ERROR", f"模型请求失败: HTTP {status} - {body[:200]}")
                 if debug:
-                    try:
-                        debug({"status": status, "response_bytes": len(body), "item_key": item_key})
-                    except Exception:
-                        pass
+                    trace_on = _trace_enabled()
+                    if trace_on:
+                        try:
+                            debug(
+                                {
+                                    "step": "response",
+                                    "api": "responses_async",
+                                    "url": _safe_base_url(url),
+                                    "model": llm_cfg.get("model"),
+                                    "item_key": item_key,
+                                    "status": status,
+                                    "response_bytes": len(body),
+                                    "response_text": body,
+                                }
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            debug({"status": status, "response_bytes": len(body), "item_key": item_key})
+                        except Exception:
+                            pass
         except aiohttp.ClientError as e:
             raise LlmError("LLM_NETWORK_ERROR", f"模型网络请求失败: {e}") from e
         except asyncio.TimeoutError:
@@ -237,15 +393,16 @@ class AsyncLLMAnalyzer:
             raise LlmError("LLM_RESPONSE_INVALID", "模型响应不是有效 JSON") from e
 
         text = _responses_extract_text(obj)
-        if debug:
-            try:
-                debug({"content_preview": _safe_preview(text), "content_chars": len(text), "item_key": item_key})
-            except Exception:
-                pass
         parsed = _extract_json(text)
         if debug:
             try:
-                debug({"parsed_keys": list(parsed.keys()), "item_key": item_key})
+                trace_on = _trace_enabled()
+                if not trace_on:
+                    debug({"content_preview": _safe_preview(text), "content_chars": len(text), "item_key": item_key})
+                payload = {"parsed_keys": list(parsed.keys()), "item_key": item_key}
+                if trace_on:
+                    payload["step"] = "parsed"
+                debug(payload)
             except Exception:
                 pass
         return parsed

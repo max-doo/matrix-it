@@ -9,6 +9,7 @@ use tauri::Emitter;
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Debug, Serialize)]
 struct ApiError {
@@ -81,6 +82,143 @@ fn resolve_config_path(root: &Path) -> PathBuf {
 
 fn resolve_fields_path(root: &Path) -> PathBuf {
   root.join("fields.json")
+}
+
+fn extract_bitable_sig_from_url(url: &str) -> Option<String> {
+  let u = url.trim();
+  if u.is_empty() {
+    return None;
+  }
+  let app_token = if let Some(idx) = u.find("/base/") {
+    let rest = &u[idx + "/base/".len()..];
+    rest
+      .split(|c| c == '/' || c == '?' || c == '#')
+      .next()
+      .unwrap_or("")
+      .trim()
+      .to_string()
+  } else {
+    String::new()
+  };
+  let table_id = if let Some(idx) = u.find("table=") {
+    let rest = &u[idx + "table=".len()..];
+    rest
+      .split(|c| c == '&' || c == '#')
+      .next()
+      .unwrap_or("")
+      .trim()
+      .to_string()
+  } else {
+    String::new()
+  };
+  if app_token.is_empty() || table_id.is_empty() {
+    return None;
+  }
+  Some(format!("{}:{}", app_token, table_id))
+}
+
+fn extract_feishu_base_sig(v: &serde_json::Value) -> Option<String> {
+  let feishu = v.get("feishu")?;
+  let url = feishu.get("bitable_url").and_then(|x| x.as_str()).unwrap_or("");
+  extract_bitable_sig_from_url(url)
+}
+
+fn reset_feishu_sync_state(root: &Path) -> Result<(), ApiError> {
+  let data_dir = resolve_data_dir_path(root);
+  let db_path = data_dir.join("matrixit.db");
+  if let Some(parent) = db_path.parent() {
+    let _ = std::fs::create_dir_all(parent);
+  }
+  if !db_path.exists() {
+    return Ok(());
+  }
+  let mut conn = rusqlite::Connection::open(&db_path).map_err(|e| ApiError::new("DB_OPEN", e.to_string()))?;
+  conn
+    .execute("CREATE TABLE IF NOT EXISTS items (item_key TEXT PRIMARY KEY, json TEXT NOT NULL)", [])
+    .map_err(|e| ApiError::new("DB_INIT", e.to_string()))?;
+  let tx = conn.transaction().map_err(|e| ApiError::new("DB_TX", e.to_string()))?;
+  let mut stmt = tx
+    .prepare("SELECT item_key, json FROM items")
+    .map_err(|e| ApiError::new("DB_QUERY", e.to_string()))?;
+  let mut rows = stmt.query([]).map_err(|e| ApiError::new("DB_QUERY", e.to_string()))?;
+  let mut updates: Vec<(String, String)> = Vec::new();
+  while let Some(row) = rows.next().map_err(|e| ApiError::new("DB_QUERY", e.to_string()))? {
+    let item_key: String = row.get(0).map_err(|e| ApiError::new("DB_ROW", e.to_string()))?;
+    let json_str: String = row.get(1).map_err(|e| ApiError::new("DB_ROW", e.to_string()))?;
+    let mut item: serde_json::Value = serde_json::from_str(&json_str).unwrap_or(serde_json::json!({}));
+    let Some(obj) = item.as_object_mut() else { continue };
+    let mut changed = false;
+    if obj.remove("record_id").is_some() {
+      changed = true;
+    }
+    if obj.remove("feishu_base_sig").is_some() {
+      changed = true;
+    }
+    if obj.remove("feishu_app_token").is_some() {
+      changed = true;
+    }
+    if obj.remove("feishu_table_id").is_some() {
+      changed = true;
+    }
+    if obj.get("sync_status").and_then(|x| x.as_str()).unwrap_or("") != "unsynced" {
+      obj.insert("sync_status".to_string(), serde_json::Value::String("unsynced".to_string()));
+      changed = true;
+    }
+    if !changed {
+      continue;
+    }
+    let next = serde_json::to_string(&item).map_err(|e| ApiError::new("JSON", e.to_string()))?;
+    updates.push((item_key, next));
+  }
+  drop(rows);
+  drop(stmt);
+  for (item_key, next_json) in &updates {
+    tx.execute(
+      "UPDATE items SET json = ?1 WHERE item_key = ?2",
+      rusqlite::params![next_json, item_key],
+    )
+    .map_err(|e| ApiError::new("DB_WRITE", e.to_string()))?;
+  }
+  tx.commit().map_err(|e| ApiError::new("DB_TX", e.to_string()))?;
+
+  let literature_path = data_dir.join("literature.json");
+  if let Ok(content) = std::fs::read_to_string(&literature_path) {
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&content) {
+      if let Some(arr) = v.as_array_mut() {
+        let mut changed_any = false;
+        for it in arr.iter_mut() {
+          let Some(obj) = it.as_object_mut() else { continue };
+          let mut changed = false;
+          if obj.remove("record_id").is_some() {
+            changed = true;
+          }
+          if obj.remove("feishu_base_sig").is_some() {
+            changed = true;
+          }
+          if obj.remove("feishu_app_token").is_some() {
+            changed = true;
+          }
+          if obj.remove("feishu_table_id").is_some() {
+            changed = true;
+          }
+          if obj.get("sync_status").and_then(|x| x.as_str()).unwrap_or("") != "unsynced" {
+            obj.insert("sync_status".to_string(), serde_json::Value::String("unsynced".to_string()));
+            changed = true;
+          }
+          if changed {
+            changed_any = true;
+          }
+        }
+        if changed_any {
+          if let Ok(s) = serde_json::to_string_pretty(&v) {
+            let _ = std::fs::write(&literature_path, s);
+          }
+        }
+      }
+    }
+  }
+
+  Ok(())
 }
 
 fn ensure_sidecar_env() {
@@ -307,6 +445,182 @@ async fn get_items(app: tauri::AppHandle, item_keys: Vec<String>) -> Result<GetI
   })
 }
 
+#[tauri::command]
+async fn resolve_pdf_path(item_key: String) -> Result<String, ApiError> {
+  let root = find_project_root();
+  let cfg_path = resolve_config_path(&root);
+  let db_path = resolve_matrixit_db_path();
+  let key = item_key.trim();
+  if key.is_empty() {
+    return Ok(String::new());
+  }
+
+  let item = read_item_from_matrixit_db(&db_path, key).unwrap_or(serde_json::json!({}));
+
+  let zotero_dir = {
+    let content = std::fs::read_to_string(cfg_path).unwrap_or_else(|_| String::new());
+    let v: serde_json::Value = serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
+    let zotero = v.get("zotero").and_then(|x| x.as_object());
+    let direct = zotero.and_then(|z| z.get("data_dir")).cloned().unwrap_or(serde_json::Value::Null);
+    let mut out = direct.as_str().unwrap_or("").trim().to_string();
+    if out.is_empty() {
+      if let Some(obj) = direct.as_object() {
+        out = obj
+          .get("path")
+          .and_then(|x| x.as_str())
+          .or_else(|| obj.get("data_dir").and_then(|x| x.as_str()))
+          .or_else(|| obj.get("dir").and_then(|x| x.as_str()))
+          .unwrap_or("")
+          .trim()
+          .to_string();
+      }
+    }
+    if out.is_empty() {
+      let base = std::env::var("USERPROFILE").unwrap_or_else(|_| String::new());
+      if base.trim().is_empty() {
+        String::new()
+      } else {
+        format!("{}\\Zotero", base.trim_end_matches(['\\', '/']))
+      }
+    } else {
+      out
+    }
+  };
+
+  let resolve_candidate = |p: &std::path::Path| -> Option<String> {
+    if !p.exists() {
+      return None;
+    }
+    std::fs::canonicalize(p)
+      .ok()
+      .map(|x| x.to_string_lossy().to_string())
+      .or_else(|| Some(p.to_string_lossy().to_string()))
+  };
+
+  if let Some(p) = item.get("pdf_path").and_then(|x| x.as_str()).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    let pb = std::path::PathBuf::from(p);
+    if pb.is_absolute() {
+      if let Some(found) = resolve_candidate(&pb) {
+        return Ok(found);
+      }
+    } else {
+      let joined = root.join(p);
+      if let Some(found) = resolve_candidate(&joined) {
+        return Ok(found);
+      }
+    }
+  }
+
+  let storage_root = if zotero_dir.trim().is_empty() {
+    std::path::PathBuf::new()
+  } else {
+    std::path::PathBuf::from(zotero_dir).join("storage")
+  };
+
+  if let Some(atts) = item.get("attachments").and_then(|x| x.as_array()) {
+    for att in atts {
+      let key = att.get("key").and_then(|x| x.as_str()).map(|s| s.trim()).unwrap_or("");
+      let filename = att.get("filename").and_then(|x| x.as_str()).map(|s| s.trim()).unwrap_or("");
+      if !filename.is_empty() {
+        let fp = std::path::PathBuf::from(filename);
+        if fp.is_absolute() {
+          if let Some(found) = resolve_candidate(&fp) {
+            return Ok(found);
+          }
+        }
+      }
+      if !storage_root.as_os_str().is_empty() && !key.is_empty() && !filename.is_empty() {
+        let p = storage_root.join(key).join(filename);
+        if let Some(found) = resolve_candidate(&p) {
+          return Ok(found);
+        }
+      }
+      if !storage_root.as_os_str().is_empty() && !key.is_empty() {
+        let pdir = storage_root.join(key);
+        if pdir.exists() && pdir.is_dir() {
+          let mut best: Option<(u64, std::path::PathBuf)> = None;
+          if let Ok(rd) = std::fs::read_dir(&pdir) {
+            for ent in rd.flatten() {
+              let p = ent.path();
+              let is_pdf = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.eq_ignore_ascii_case("pdf"))
+                .unwrap_or(false);
+              if !is_pdf {
+                continue;
+              }
+              let size = ent.metadata().ok().map(|m| m.len()).unwrap_or(0);
+              if best.as_ref().map(|(s, _)| size > *s).unwrap_or(true) {
+                best = Some((size, p));
+              }
+            }
+          }
+          if let Some((_, p)) = best {
+            if let Some(found) = resolve_candidate(&p) {
+              return Ok(found);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  Ok(String::new())
+}
+
+#[tauri::command]
+async fn open_pdf_in_browser(app: tauri::AppHandle, pdf_path: String) -> Result<(), ApiError> {
+  let p = pdf_path.trim();
+  if p.is_empty() {
+    return Err(ApiError::new("PDF_PATH_EMPTY", "pdf path is empty"));
+  }
+  let pdf_abs = std::fs::canonicalize(p).unwrap_or_else(|_| std::path::PathBuf::from(p));
+  if !pdf_abs.exists() {
+    return Err(ApiError::new(
+      "PDF_NOT_FOUND",
+      format!("pdf not found: {}", pdf_abs.to_string_lossy()),
+    ));
+  }
+  let pdf_url = match tauri::Url::from_file_path(&pdf_abs) {
+    Ok(u) => u.to_string(),
+    Err(_) => {
+      return Err(ApiError::new(
+        "PDF_URL",
+        format!("failed to convert to file url: {}", pdf_abs.to_string_lossy()),
+      ))
+    }
+  };
+
+  let root = find_project_root();
+  let data_dir = resolve_data_dir_path(&root);
+  let _ = std::fs::create_dir_all(&data_dir);
+  let html_path = data_dir.join("matrixit-open-pdf.html");
+  let html = format!(
+    r#"<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MatrixIt PDF</title>
+    <style>html,body{{height:100%;margin:0}} embed{{width:100%;height:100%}}</style>
+  </head>
+  <body>
+    <embed src="{src}" type="application/pdf" />
+  </body>
+</html>
+"#,
+    src = pdf_url
+  );
+  std::fs::write(&html_path, html).map_err(|e| ApiError::new("WRITE_HTML", e.to_string()))?;
+
+  app
+    .opener()
+    .open_path(html_path.to_string_lossy().to_string(), None::<&str>)
+    .map_err(|e| ApiError::new("OPEN_BROWSER", e.to_string()))?;
+  Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "event", content = "data")]
 enum AnalysisEvent {
@@ -366,6 +680,8 @@ async fn start_analysis(
   let mut buf = String::new();
   let mut stderr_buf = String::new();
   let mut stderr_line_buf = String::new();
+  let mut pending_json_buf: Option<String> = None;
+  let max_pending_json_bytes: usize = 512 * 1024;
   let mut sidecar_diag: Option<serde_json::Value> = None;
   let mut finished: HashSet<String> = HashSet::new();
   let mut failed: HashSet<String> = HashSet::new();
@@ -446,7 +762,27 @@ async fn start_analysis(
           if line.is_empty() {
             continue;
           }
-          handle_json_line(line);
+          if let Some(acc) = pending_json_buf.as_mut() {
+            acc.push('\n');
+            acc.push_str(line);
+            if acc.len() > max_pending_json_bytes {
+              pending_json_buf = None;
+              continue;
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(acc) {
+              let compact = serde_json::to_string(&v).unwrap_or_else(|_| acc.clone());
+              pending_json_buf = None;
+              handle_json_line(&compact);
+            }
+            continue;
+          }
+          if serde_json::from_str::<serde_json::Value>(line).is_ok() {
+            handle_json_line(line);
+            continue;
+          }
+          if line.starts_with('{') || line.starts_with('[') {
+            pending_json_buf = Some(line.to_string());
+          }
         }
       }
       tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
@@ -492,7 +828,18 @@ async fn start_analysis(
 
   let remaining = buf.trim();
   if !remaining.is_empty() {
-    handle_json_line(remaining);
+    if let Some(acc) = pending_json_buf.as_mut() {
+      acc.push('\n');
+      acc.push_str(remaining);
+      if acc.len() <= max_pending_json_bytes {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(acc) {
+          let compact = serde_json::to_string(&v).unwrap_or_else(|_| acc.clone());
+          handle_json_line(&compact);
+        }
+      }
+    } else {
+      handle_json_line(remaining);
+    }
   }
   let remaining_err = stderr_line_buf.trim();
   if !remaining_err.is_empty() {
@@ -1000,6 +1347,24 @@ async fn read_config() -> Result<serde_json::Value, ApiError> {
 #[tauri::command]
 async fn save_config(next: serde_json::Value) -> Result<(), ApiError> {
   let root = find_project_root();
+  let old_sig = {
+    let path = resolve_config_path(&root);
+    if let Ok(content) = std::fs::read_to_string(path) {
+      if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+        extract_feishu_base_sig(&v)
+      } else {
+        None
+      }
+    } else {
+      None
+    }
+  };
+  let new_sig = extract_feishu_base_sig(&next);
+  if let (Some(a), Some(b)) = (old_sig, new_sig) {
+    if a != b {
+      let _ = reset_feishu_sync_state(&root);
+    }
+  }
   let new_path = root.join("config").join("config.json");
   if let Some(parent) = new_path.parent() {
     std::fs::create_dir_all(parent).map_err(|e| ApiError::new("MKDIR", e.to_string()))?;
@@ -1057,12 +1422,15 @@ fn main() {
       cancelled: AtomicBool::new(false),
       pending_keys: Mutex::new(HashSet::new()),
     })
+    .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_shell::init())
     .invoke_handler(tauri::generate_handler![
       start_zotero_watch,
       stop_zotero_watch,
       load_library,
       get_items,
+      resolve_pdf_path,
+      open_pdf_in_browser,
       format_citations,
       start_analysis,
       stop_analysis,

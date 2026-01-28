@@ -9,6 +9,7 @@
 Sidecar 通过命令行子命令提供 5 类能力：
 
 - `load_library`：读取 Zotero 数据库，写入本地 SQLite（主存），并返回收藏夹树 + 条目列表（同时导出 `data/literature.json` 快照）
+- `resolve_pdf_path`：为单个 `item_key` 解析可用的 PDF 绝对路径（用于“打开附件”等按需场景）
 - `analyze`：对指定 `item_key` 列表逐条分析（直接读取 Zotero storage 的 PDF → 提取文本 → 调用 LLM 输出结构化字段），并逐条输出事件
 - `sync_feishu`：将指定 `item_key` 同步到飞书多维表（含字段自动创建、附件上传），并回写本地同步状态
 - `update_item`：对本地条目执行字段级 patch 更新（保护部分核心字段不允许改）
@@ -92,6 +93,38 @@ python backend/matrixit_backend/sidecar.py <cmd> [args...]
 ```
 
 实现： [load_library](file:///d:/Project/matrix-it/backend/matrixit_backend/sidecar.py#L93-L162)、main 分发 [sidecar.py](file:///d:/Project/matrix-it/backend/matrixit_backend/sidecar.py#L402-L408)
+
+---
+
+### 3.2 `resolve_pdf_path`
+
+**用途**：为单个条目解析可用的 PDF 绝对路径（不扫描全库，按需调用）。
+
+**请求**：
+- `cmd = "resolve_pdf_path"`
+- `argv[2]`：`item_key`
+
+示例：
+
+```bash
+python backend/matrixit_backend/sidecar.py resolve_pdf_path "ABCD1234"
+```
+
+**响应（stdout，单个 JSON）**：
+
+成功：
+
+```json
+{ "pdf_path": "C:/.../storage/XXXX/xxx.pdf" }
+```
+
+失败（或无附件）：
+
+```json
+{ "pdf_path": "", "error": { "code": "ITEM_NOT_FOUND", "message": "ABCD1234" } }
+```
+
+实现： [resolve_pdf_path](file:///d:/Project/matrix-it/backend/matrixit_backend/sidecar.py)
 
 ---
 

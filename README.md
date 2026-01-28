@@ -312,7 +312,23 @@ LLM 解析字段的“顺序控制”推荐使用：
   - `{"debug": {"enabled": false}}`
 - 开关方式（环境变量优先级最高）：设置 `MATRIXIT_DEBUG=1`（开启）或 `MATRIXIT_DEBUG=0`（关闭）
 
-开启后，终端会打印 `type=debug` 的 JSON 行，包含：字段 keys 顺序、输入长度裁剪信息、请求/响应字节数、模型输出预览（截断）、解析出的键集合等。
+开启后，终端会打印 `type=debug` 的 JSON 行。
+
+LLM Trace（默认开启，可关闭）：
+
+- 默认会输出完整 LLM 请求流（`step=request/response/parsed`）：
+  - `request`：完整请求参数（system 提示词不截断；user 提示词仅对日志做截断）
+  - `response`：完整 HTTP response 文本（不截断）
+  - `parsed`：解析出的键集合
+- 安全性：不会输出 API Key/Authorization；多模态请求不会输出 PDF 的 base64（会用占位信息替代）。
+- 关闭 Trace：
+  - 配置：`{"debug": {"llm_trace": false}}`
+  - 环境变量：`MATRIXIT_LLM_TRACE=0`
+- 调整 user 提示词日志截断长度：
+  - 配置：`debug.llm_trace_user_max_chars`
+  - 环境变量：`MATRIXIT_LLM_TRACE_USER_MAX=<number>`
+
+其他调试信息仍包含：字段 keys 顺序、输入长度裁剪信息、请求/响应字节数、解析出的键集合等。
 
 并行与诊断（终端汇总）：
 

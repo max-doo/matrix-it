@@ -9,6 +9,8 @@
   },
   "debug": {
     "enabled": true,
-    "print_prompts": true
+    "print_prompts": true,
+    "llm_trace": true,
+    "llm_trace_user_max_chars": 2000
   }
 }
