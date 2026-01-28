@@ -2,6 +2,13 @@
 
 面向科研场景的「Zotero → 本地矩阵 → 一键分析 → 飞书多维表格」自动化工具（桌面端）。
 
+## 核心特性 (v2026.1)
+
+- **深度元数据集成**：不仅读取 Zotero 基础信息，更内置 **JCR 影响因子 (IF)**、**中科院分区**（基础版/升级版）、预警期刊标识等高价值数据。
+- **现代化矩阵视图**：支持自定义列排序、拖拽调整、多维筛选，并针对 IF 和分区标签进行了专业的视觉优化（Ant Design 预设配色，柔和且直观）。
+- **智能分析**：基于 LLM (OpenAI-Style) 的全文深度分析，支持并行处理、断点续传与多模态回退。
+- **飞书双向同步**：将分析结果与元数据（含附件 PDF）一键同步至飞书多维表格，支持通过配置文件自定义同步字段（如 IF、期刊标签）。
+
 ## 目录结构与职责
 
 - `frontend/`：React + Vite + Tailwind + Ant Design 前端
@@ -196,6 +203,7 @@ pip install -r backend/requirements.txt
 引用格式（GB/T 7714）相关依赖已包含在 `backend/requirements.txt` 中：
 - `citeproc-py`、`citeproc-py-styles`（安装后模块名分别为 `citeproc`、`citeproc_styles`）
 - `aiohttp`（用于并行 LLM 分析；若缺失则 LLM 阶段会退化为串行）
+- `openpyxl`、`et_xmlfile`（用于 Excel 导出）
 
 如需构建 sidecar 可执行文件（PyInstaller）：
 
@@ -377,6 +385,7 @@ python backend/matrixit_backend/pdf.py <pdf_path> all
   python backend/matrixit_backend/sidecar.py sync_feishu "[\"<item_key>\"]"
   ```
   - 读取 `config/config.json` 的 `fields` 自动创建缺失字段（映射 `name`）
+  - **自定义元数据**：通过 `config.json` 的 `feishu.meta_sync` 列表可灵活配置同步字段（支持 `impact_factor`、`journal_tags` 等）。
   - 附件上传：按 PDF 定位策略直接上传 storage 中的 PDF
   - 配置检查：`feishu.app_id/app_secret/bitable_url`（或 `app_token/table_id`）
 - 局部更新条目：
@@ -392,6 +401,16 @@ python backend/matrixit_backend/pdf.py <pdf_path> all
   - stdout 输出：`{ "citations": { "<item_key>": "[1]作者. 题名[文献类型]. ..." } }`
   - 副作用：后端对成功生成的条目批量写入 SQLite（更新 `citation` 字段），并导出 `data/literature.json`；前端无需逐条写回
   - Windows 直传 argv 容易被引号转义影响，建议使用 `-` 从 stdin 读 JSON（或用 Python 生成参数字符串）。
+- 导出 Excel：
+  ```bash
+  python backend/matrixit_backend/sidecar.py export_excel "{\"output_path\":\"...\", \"filename\":\"...\", \"keys\":[\"...\"]}"
+  ```
+  - 导出元数据、引用及所有分析完成后（status=done）的字段。
+- 导出 PDF：
+  ```bash
+  python backend/matrixit_backend/sidecar.py export_pdfs "{\"output_dir\":\"...\", \"keys\":[\"...\"]}"
+  ```
+  - 支持按 Zotero 集合（Collection）层级结构递归创建文件夹并复制 PDF。
 
 ## 项目规则说明
 

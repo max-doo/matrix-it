@@ -9,7 +9,9 @@
       "abstract",
       "tags",
       "collections",
-      "url"
+      "url",
+      "impact_factor",
+      "journal_tags"
     ]
   },
   "fields": {
@@ -109,6 +111,14 @@
         "name": "DOI",
         "type": "string"
       },
+      "impact_factor": {
+        "name": "IF",
+        "type": "number"
+      },
+      "journal_tags": {
+        "name": "期刊标签",
+        "type": "multi_select"
+      },
       "publications": {
         "name": "出版物",
         "type": "string"
@@ -137,11 +147,11 @@
   },
   "llm": {
     "api_key": "",
-    "base_url": "http://127.0.0.1:8045/v1",
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "max_input_chars": 100000,
     "max_pdf_bytes": 20971520,
     "model": [
-      "gemini-3-flash"
+      "qwen-flash"
     ],
     "multimodal": false,
     "parallel_count": 3,
@@ -156,7 +166,7 @@
         ],
         "multimodal": false,
         "parallel_count": 3,
-        "temperature": 0.8
+        "temperature": 0.6
       },
       "dashscope": {
         "api_key": "",
@@ -244,8 +254,8 @@
         "temperature": 0.5
       }
     },
-    "provider": "custom",
-    "temperature": 0.6
+    "provider": "dashscope",
+    "temperature": 0.5
   },
   "ui": {
     "debug_llm": true,
@@ -286,7 +296,9 @@
             "author",
             "year",
             "type",
-            "publications"
+            "publications",
+            "impact_factor",
+            "journal_tags"
           ]
         }
       },
@@ -298,6 +310,8 @@
             "year",
             "type",
             "publications",
+            "impact_factor",
+            "journal_tags",
             "tags"
           ]
         }

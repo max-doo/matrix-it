@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from . import jcr
+
 
 def get_default_zotero_dir() -> str:
     """默认 Zotero 数据目录（Windows：%USERPROFILE%\\Zotero）。"""
@@ -257,6 +259,16 @@ def read_items(conn: sqlite3.Connection, collections: Dict[int, dict]) -> List[d
             "creators": creators_struct,
             "tags": tags_by_item_id.get(int(item_id), []),
         }
+
+        # 查询 JCR 影响因子和分区(仅对期刊论文类型)
+        if item_type in ("journalArticle", "conferencePaper", "magazineArticle"):
+            journal_name = metadata.get("publicationTitle", "") or publications_value
+            issn = metadata.get("ISSN", "")
+            jcr_data, cas_data = jcr.query_journal_info(journal_name, issn)
+            if jcr_data:
+                meta_extra["jcr"] = jcr_data
+            if cas_data:
+                meta_extra["cas"] = cas_data
 
         items.append(
             {

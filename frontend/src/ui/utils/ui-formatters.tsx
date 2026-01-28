@@ -68,3 +68,105 @@ export function getStatusColorClass(status: string, resultStatus?: 'success' | '
     if (resultStatus === 'warning') return 'text-orange-600'
     return 'text-slate-500'
 }
+
+// ==================== JCR 影响因子和期刊标签格式化 ====================
+
+/**
+ * 根据 IF 值返回对应的颜色
+ * 参考 ShowJCR 的颜色编码方案
+ */
+export function getIFColor(value: number): string {
+    if (value >= 10) return '#d4380d'   // Volcano-6
+    if (value >= 5) return '#d46b08'    // Orange-6
+    if (value >= 3) return '#389e0d'    // Green-6
+    if (value >= 2) return '#389e0d'    // Green-6 (简化)
+    if (value >= 1) return '#389e0d'    // Green-6 (简化)
+    return '#595959'                     // Grey-7
+}
+
+/**
+ * 格式化 IF 值显示
+ * 带颜色编码,保留1位小数
+ */
+export function formatIF(value: unknown): { text: string; color: string } {
+    if (!value) return { text: '-', color: '#8c8c8c' }
+    const num = typeof value === 'number' ? value : parseFloat(String(value))
+    if (isNaN(num)) return { text: '-', color: '#8c8c8c' }
+    return {
+        text: num.toFixed(1),
+        color: getIFColor(num),
+    }
+}
+
+/**
+ * JCR 分区颜色映射
+ */
+export const QUARTILE_COLORS: Record<string, string> = {
+    'Q1': 'volcano',
+    'Q2': 'orange',
+    'Q3': 'green',
+    'Q4': 'cyan',
+}
+
+/**
+ * 中科院分区颜色映射
+ */
+export function getCASColor(partition: string): string {
+    if (!partition) return '#d9d9d9'
+    const partNum = partition.charAt(0)
+    const colorMap: Record<string, string> = {
+        '1': 'volcano',
+        '2': 'orange',
+        '3': 'green',
+        '4': 'cyan',
+    }
+    return colorMap[partNum] || 'default'
+}
+
+/**
+ * 期刊标签数据结构
+ */
+export interface JournalTagInfo {
+    type: 'jcr' | 'cas' | 'top'
+    label: string
+    color: string
+}
+
+/**
+ * 从记录中提取期刊标签列表
+ * 用于表格中渲染多个彩色标签
+ */
+export function getJournalTags(record: { meta_extra?: { jcr?: { quartile?: string }; cas?: { category?: string; partition?: string; top?: boolean } } }): JournalTagInfo[] {
+    const tags: JournalTagInfo[] = []
+    const jcr = record.meta_extra?.jcr
+    const cas = record.meta_extra?.cas
+
+    // JCR 分区标签
+    if (jcr?.quartile) {
+        tags.push({
+            type: 'jcr',
+            label: `SCI ${jcr.quartile}`,
+            color: QUARTILE_COLORS[jcr.quartile] || 'default',
+        })
+    }
+
+    // 中科院分区标签
+    if (cas?.partition) {
+        tags.push({
+            type: 'cas',
+            label: `中科院 ${cas.category || ''}${cas.partition}`,
+            color: getCASColor(cas.partition),
+        })
+    }
+
+    // Top 期刊标签
+    if (cas?.top) {
+        tags.push({
+            type: 'top',
+            label: 'Top',
+            color: 'red',
+        })
+    }
+
+    return tags
+}

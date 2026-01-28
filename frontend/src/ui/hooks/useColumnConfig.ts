@@ -113,10 +113,10 @@ export function useColumnConfig(
     )
 
     const metaColumnPanel = useMemo(() => {
-        const primaryKeys = ['title', 'author', 'year', 'type', 'publications', 'tags']
+        const primaryKeys = ['title', 'author', 'year', 'type', 'publications', 'impact_factor', 'journal_tags', 'tags']
         const allKeys = primaryKeys.filter((k) => {
             if (activeView === 'matrix' && k === 'tags') return false
-            if (['year', 'author', 'type', 'publications'].includes(k)) return true
+            if (['year', 'author', 'type', 'publications', 'impact_factor', 'journal_tags'].includes(k)) return true
             return k in metaFieldDefs || k === 'tags'
         })
         const defaultVisible = DEFAULT_META_COLUMN_ORDER.filter((k) => allKeys.includes(k))
@@ -194,10 +194,10 @@ export function useColumnConfig(
     }, [])
 
     const tableMetaColumns = useMemo<LiteratureTableColumnOption[]>(() => {
-        const primaryKeys = ['title', 'author', 'year', 'type', 'publications', 'tags']
+        const primaryKeys = ['title', 'author', 'year', 'type', 'publications', 'impact_factor', 'journal_tags', 'tags']
         const allKeys = primaryKeys.filter((k) => {
             if (activeView === 'matrix' && k === 'tags') return false
-            if (['year', 'author', 'type', 'publications'].includes(k)) return true
+            if (['year', 'author', 'type', 'publications', 'impact_factor', 'journal_tags'].includes(k)) return true
             return k in metaFieldDefs || k === 'tags'
         })
         const defaultVisible = DEFAULT_META_COLUMN_ORDER.filter((k) => allKeys.includes(k))

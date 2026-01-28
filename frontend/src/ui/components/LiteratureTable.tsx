@@ -10,7 +10,7 @@ import type { ProColumns } from '@ant-design/pro-components'
 import { ProTable } from '@ant-design/pro-components'
 
 import type { LiteratureItem, ProcessingStatus } from '../../types'
-import { formatAuthor, getLiteratureTypeMeta } from '../utils/ui-formatters'
+import { formatAuthor, formatIF, getJournalTags, getLiteratureTypeMeta } from '../utils/ui-formatters'
 
 export type LiteratureTableView = 'zotero' | 'matrix'
 
@@ -49,6 +49,8 @@ const COLUMN_MIN_WIDTHS: Record<string, number> = {
   tags: 200,
   key_word: 200,
   publications: 220,
+  impact_factor: 60,
+  journal_tags: 240,
   [STATUS_KEY]: 120,
 }
 
@@ -189,7 +191,7 @@ export function LiteratureTable({
   activeItemKey,
 }: LiteratureTableProps) {
   const showStatus = true
-  const fixedWidthCols = useMemo(() => new Set(['author', 'year', 'type', 'bib_type']), [])
+  const fixedWidthCols = useMemo(() => new Set(['author', 'year', 'type', 'bib_type', 'impact_factor']), [])
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const highlightTokens = useMemo(() => {
@@ -732,6 +734,31 @@ export function LiteratureTable({
             ...(fixedWidth ? {} : { onResizeStart: startResize(colKey) }),
           } as unknown as ResizableHeaderCellProps),
           sorter: (a, b) => {
+            // 特殊处理：IF 影响因子（数值排序）
+            if (colKey === 'impact_factor') {
+              const getIF = (rec: unknown) => {
+                const r = rec as { meta_extra?: { jcr?: { impact_factor?: number } } }
+                const val = r.meta_extra?.jcr?.impact_factor
+                return typeof val === 'number' ? val : -1
+              }
+              // 降序排列时，IF 高的在前面；升序时 IF 低的在前面。sorter 返回负数则 a 在前。
+              return getIF(a) - getIF(b)
+            }
+
+            // 特殊处理：期刊标签（按分区权重排序 Q1 > Q2...）
+            if (colKey === 'journal_tags') {
+              const getScore = (rec: unknown) => {
+                const r = rec as { meta_extra?: { jcr?: { quartile?: string } } }
+                const q = r.meta_extra?.jcr?.quartile
+                if (q === 'Q1') return 4
+                if (q === 'Q2') return 3
+                if (q === 'Q3') return 2
+                if (q === 'Q4') return 1
+                return 0
+              }
+              return getScore(a) - getScore(b)
+            }
+
             const av = (a as Record<string, unknown>)[colKey]
             const bv = (b as Record<string, unknown>)[colKey]
             return String(av ?? '').localeCompare(String(bv ?? ''), 'zh-Hans-CN')
@@ -754,6 +781,33 @@ export function LiteratureTable({
             if (colKey === 'type' || colKey === 'bib_type') {
               const meta = getLiteratureTypeMeta(v)
               return <Tag color={meta.color} bordered={false}>{meta.label}</Tag>
+            }
+
+            // 特殊处理：IF 影响因子（颜色编码）
+            if (colKey === 'impact_factor') {
+              const metaExtra = (record as Record<string, unknown>).meta_extra
+              const jcrData = metaExtra && typeof metaExtra === 'object' ? (metaExtra as Record<string, unknown>).jcr : null
+              const ifValue = jcrData && typeof jcrData === 'object' ? (jcrData as Record<string, unknown>).impact_factor : null
+              if (ifValue !== null && ifValue !== undefined) {
+                const formatted = formatIF(ifValue)
+                return <span style={{ color: formatted.color, fontWeight: 600 }}>{formatted.text}</span>
+              }
+              return <span className="secondary-color">-</span>
+            }
+
+            // 特殊处理：期刊标签（JCR分区 + 中科院分区 + Top）
+            if (colKey === 'journal_tags') {
+              const journalTags = getJournalTags(record as { meta_extra?: { jcr?: { quartile?: string }; cas?: { category?: string; partition?: string; top?: boolean } } })
+              if (journalTags.length > 0) {
+                return (
+                  <div className="flex flex-wrap gap-1">
+                    {journalTags.map((tag, idx) => (
+                      <Tag key={`${tag.type}-${idx}`} color={tag.color} bordered={false} className="m-0">{tag.label}</Tag>
+                    ))}
+                  </div>
+                )
+              }
+              return <span className="secondary-color">-</span>
             }
 
             // 特殊处理：Zotero 标签

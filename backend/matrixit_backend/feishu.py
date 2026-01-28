@@ -50,7 +50,7 @@ TYPE_MAPPING = {
     "file": FIELD_TYPE_ATTACHMENT,
 }
 
-FEISHU_META_DEFAULT_ORDER = ["title", "author", "year", "type", "publications", "abstract", "tags", "collections", "url", "doi"]
+FEISHU_META_DEFAULT_ORDER = ["title", "author", "year", "type", "publications", "impact_factor", "journal_tags", "abstract", "tags", "collections", "url", "doi"]
 FEISHU_META_FIXED_KEYS = {"title", "author", "year", "publications"}
 
 LITERATURE_TYPE_LABELS_ZH: Dict[str, str] = {
@@ -468,6 +468,22 @@ def map_item(item: dict, mapping: Dict[str, str], file_token: Optional[str], fie
         elif jk == "tags":
             meta = item.get("meta_extra") if isinstance(item.get("meta_extra"), dict) else {}
             val = meta.get("tags") if isinstance(meta, dict) else None
+        elif jk == "impact_factor":
+            meta = item.get("meta_extra") if isinstance(item.get("meta_extra"), dict) else {}
+            jcr = meta.get("jcr") if isinstance(meta.get("jcr"), dict) else {}
+            val = jcr.get("impact_factor")
+        elif jk == "journal_tags":
+            meta = item.get("meta_extra") if isinstance(item.get("meta_extra"), dict) else {}
+            jcr = meta.get("jcr") if isinstance(meta.get("jcr"), dict) else {}
+            cas = meta.get("cas") if isinstance(meta.get("cas"), dict) else {}
+            tags = []
+            if jcr.get("quartile"):
+                tags.append(f"SCI {jcr.get('quartile')}")
+            if cas.get("partition"):
+                tags.append(f"中科院 {cas.get('category', '')}{cas.get('partition')}")
+            if cas.get("top"):
+                tags.append("Top")
+            val = tags
         else:
             continue
 
