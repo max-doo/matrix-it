@@ -4,7 +4,6 @@
  *           兼容 Tauri 环境与浏览器环境（Mock/LocalStorage兜底）。
  */
 import { Channel, invoke } from '@tauri-apps/api/core'
-import { openPath as openerOpenPath } from '@tauri-apps/plugin-opener'
 import type { AnalysisEvent, CollectionNode, LiteratureItem } from '../types'
 import { loadLibraryMock } from './mock'
 
@@ -88,11 +87,13 @@ export async function openExternal(rawUrl: string): Promise<{ opened: boolean }>
 }
 
 export async function openPath(rawPath: string): Promise<{ opened: boolean }> {
-  const path = String(rawPath || '').trim()
+  let path = String(rawPath || '').trim()
+  if (path.startsWith('\\\\?\\UNC\\')) path = `\\\\${path.slice('\\\\?\\UNC\\'.length)}`
+  if (path.startsWith('\\\\?\\')) path = path.slice('\\\\?\\'.length)
   if (!path) return { opened: false }
   if (isTauriRuntime()) {
     try {
-      await openerOpenPath(path)
+      await invoke('open_path_debug', { path })
       return { opened: true }
     } catch (e) {
       throw normalizeInvokeError(e)

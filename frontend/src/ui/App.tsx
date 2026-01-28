@@ -274,6 +274,10 @@ export default function App() {
     metaFieldDefs,
     analysisFieldDefs,
   } = useAppConfig(mode)
+  const pdfOpenMode = useMemo(() => {
+    const v = (rawConfig as Record<string, any> | undefined)?.ui?.pdf_open_mode
+    return v === 'browser' ? 'browser' : 'local'
+  }, [rawConfig])
   useZoteroWatch(zoteroStatus, refreshLibrary)
   const [currentPageRows, setCurrentPageRows] = useState<LiteratureItem[]>([])
   const [tableSortedKeys, setTableSortedKeys] = useState<string[]>([])
@@ -908,6 +912,7 @@ export default function App() {
               <LiteratureDetailDrawer
                 item={activeItem}
                 mode={detailMode}
+                pdfOpenMode={pdfOpenMode}
                 analysisFieldDefs={analysisFieldDefs}
                 analysisOrder={matrixAnalysisOrder}
                 onSwitchMode={setDetailMode}

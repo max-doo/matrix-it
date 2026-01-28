@@ -15,6 +15,7 @@ export type LiteratureDetailDrawerMode = 'zotero' | 'matrix'
 export type LiteratureDetailDrawerProps = {
   item: LiteratureItem | null
   mode: LiteratureDetailDrawerMode
+  pdfOpenMode?: 'local' | 'browser'
   analysisFieldDefs?: Record<string, unknown>
   analysisOrder?: string[]
   onSwitchMode?: (mode: LiteratureDetailDrawerMode) => void
@@ -36,6 +37,7 @@ function toText(v: unknown): string {
 export function LiteratureDetailDrawer({
   item,
   mode,
+  pdfOpenMode = 'local',
   analysisFieldDefs,
   analysisOrder,
   onSwitchMode,
@@ -49,6 +51,22 @@ export function LiteratureDetailDrawer({
   canNext,
 }: LiteratureDetailDrawerProps) {
   const { modal } = App.useApp()
+  const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth))
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => setViewportWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  const drawerWidth = useMemo(() => {
+    const minWidth = 480
+    const maxWidth = 960
+    const preferred = Math.round(viewportWidth * 0.5)
+    const next = Math.min(maxWidth, Math.max(minWidth, preferred))
+    return Math.min(next, viewportWidth)
+  }, [viewportWidth])
 
   const metaExtra = useMemo(() => {
     const raw = (item as Record<string, unknown> | null)?.meta_extra
@@ -326,6 +344,28 @@ export function LiteratureDetailDrawer({
         if (itemKey) {
           const pdfPath = await resolvePdfPath(itemKey)
           if (pdfPath) {
+            if (pdfOpenMode === 'browser') {
+              let openErr: unknown = null
+              try {
+                const opened = await openPdfInBrowser(pdfPath)
+                if (opened.opened) return
+              } catch (e) {
+                openErr = e
+              }
+              try {
+                const opened = await openPath(pdfPath)
+                if (opened.opened) return
+              } catch (e) {
+                modal.error({ title: '打开失败', content: e instanceof Error ? e.message : String(e) })
+                return
+              }
+              modal.error({
+                title: '打开失败',
+                content: openErr instanceof Error ? openErr.message : '无法打开 PDF（系统未返回成功）。',
+              })
+              return
+            }
+
             let openErr: unknown = null
             try {
               const opened = await openPath(pdfPath)
@@ -363,7 +403,7 @@ export function LiteratureDetailDrawer({
     } catch (e) {
       modal.error({ title: '打开失败', content: e instanceof Error ? e.message : String(e) })
     }
-  }, [hasPdfAttachment, item, itemKey, modal, originalHref])
+  }, [hasPdfAttachment, item, itemKey, modal, originalHref, pdfOpenMode])
 
   const readOriginalButton = (
     <Button icon={<ReadOutlined />} onClick={() => void handleOpenOriginal()} disabled={readOriginalDisabled}>
@@ -375,7 +415,7 @@ export function LiteratureDetailDrawer({
     <Drawer
       title={null}
       placement="right"
-      width={680}
+      width={drawerWidth}
       onClose={requestClose}
       open={!!item}
       closable={false}

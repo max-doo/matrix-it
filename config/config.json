@@ -249,6 +249,7 @@
   },
   "ui": {
     "debug_llm": true,
+    "pdf_open_mode": "local",
     "table_columns": {
       "matrix": {
         "analysis": {

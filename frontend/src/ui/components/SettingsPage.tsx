@@ -270,7 +270,6 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
       <Divider className="!my-0" dashed />
 
       {/* Row 2: 创造力 (温度) */}
-      {/* Row 2: 创造力 (温度) */}
       <Form.Item
         label={
           <span>
@@ -614,6 +613,25 @@ export function SettingsPage({
                   <Typography.Paragraph type="secondary" className="!mt-2 !mb-0">
                     填写 Zotero 的数据目录（需包含 `zotero.sqlite` 与 `storage/`）。
                   </Typography.Paragraph>
+
+                  <Divider className="!my-4" />
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Form.Item
+                      label="PDF 打开方式"
+                      name={['ui', 'pdf_open_mode']}
+                      initialValue="local"
+                      tooltip="本地打开会使用系统默认的 PDF 程序；如失败会自动兜底用浏览器打开。"
+                      className="!mb-0"
+                    >
+                      <Select
+                        options={[
+                          { label: '本地打开（默认）', value: 'local' },
+                          { label: '优先用浏览器打开', value: 'browser' },
+                        ]}
+                      />
+                    </Form.Item>
+                  </div>
                 </div>
 
                 <Divider className="!my-8" />

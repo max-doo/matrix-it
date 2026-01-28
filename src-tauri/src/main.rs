@@ -487,14 +487,28 @@ async fn resolve_pdf_path(item_key: String) -> Result<String, ApiError> {
     }
   };
 
+  let normalize_path = |raw: String| -> String {
+    #[cfg(windows)]
+    {
+      if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{}", rest);
+      }
+      if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        return rest.to_string();
+      }
+    }
+    raw
+  };
+
   let resolve_candidate = |p: &std::path::Path| -> Option<String> {
     if !p.exists() {
       return None;
     }
-    std::fs::canonicalize(p)
+    let raw = std::fs::canonicalize(p)
       .ok()
       .map(|x| x.to_string_lossy().to_string())
-      .or_else(|| Some(p.to_string_lossy().to_string()))
+      .unwrap_or_else(|| p.to_string_lossy().to_string());
+    Some(normalize_path(raw))
   };
 
   if let Some(p) = item.get("pdf_path").and_then(|x| x.as_str()).map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -618,6 +632,58 @@ async fn open_pdf_in_browser(app: tauri::AppHandle, pdf_path: String) -> Result<
     .opener()
     .open_path(html_path.to_string_lossy().to_string(), None::<&str>)
     .map_err(|e| ApiError::new("OPEN_BROWSER", e.to_string()))?;
+  Ok(())
+}
+
+#[tauri::command]
+async fn open_path_debug(app: tauri::AppHandle, path: String) -> Result<(), ApiError> {
+  let raw = path.trim().to_string();
+  if raw.is_empty() {
+    eprintln!("[MATRIXIT_OPEN_PATH] empty input");
+    return Err(ApiError::new("PATH_EMPTY", "path is empty"));
+  }
+
+  let mut normalized = raw.clone();
+  #[cfg(windows)]
+  {
+    if let Some(rest) = normalized.strip_prefix(r"\\?\UNC\") {
+      normalized = format!(r"\\{}", rest);
+    } else if let Some(rest) = normalized.strip_prefix(r"\\?\") {
+      normalized = rest.to_string();
+    }
+  }
+
+  let p = std::path::PathBuf::from(&normalized);
+  let exists = p.exists();
+  let meta = std::fs::metadata(&p).ok();
+  let is_file = meta.as_ref().map(|m| m.is_file()).unwrap_or(false);
+  let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+
+  eprintln!(
+    "[MATRIXIT_OPEN_PATH] {{\"raw\":{},\"normalized\":{},\"exists\":{},\"is_file\":{},\"size\":{}}}",
+    serde_json::to_string(&raw).unwrap_or_else(|_| "\"\"".to_string()),
+    serde_json::to_string(&normalized).unwrap_or_else(|_| "\"\"".to_string()),
+    exists,
+    is_file,
+    size
+  );
+
+  if !exists {
+    return Err(ApiError::new("PATH_NOT_FOUND", normalized));
+  }
+
+  app
+    .opener()
+    .open_path(normalized.clone(), None::<&str>)
+    .map_err(|e| {
+      eprintln!(
+        "[MATRIXIT_OPEN_PATH] failed: {}",
+        serde_json::to_string(&format!("{}", e)).unwrap_or_else(|_| "\"\"".to_string())
+      );
+      ApiError::new("OPEN_PATH_FAILED", e.to_string())
+    })?;
+
+  eprintln!("[MATRIXIT_OPEN_PATH] ok");
   Ok(())
 }
 
@@ -1431,6 +1497,7 @@ fn main() {
       get_items,
       resolve_pdf_path,
       open_pdf_in_browser,
+      open_path_debug,
       format_citations,
       start_analysis,
       stop_analysis,
