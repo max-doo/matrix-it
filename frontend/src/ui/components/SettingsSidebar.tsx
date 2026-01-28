@@ -29,7 +29,7 @@ export function SettingsSidebar({ activeKey, onSelect, onGoHome, zoteroStatus }:
                     selectedKeys={[activeKey]}
                     onClick={(e) => onSelect(e.key as SettingsSectionKey)}
                     items={[
-                        { key: 'zotero', label: 'Zotero' },
+                        { key: 'zotero', label: '基础设置' },
                         { key: 'llm', label: '大模型 API' },
                         { key: 'feishu', label: '飞书多维表格' },
                         { key: 'fields', label: '字段设置' },

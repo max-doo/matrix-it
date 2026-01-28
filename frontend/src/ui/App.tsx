@@ -19,6 +19,7 @@ import { SettingsPage } from './components/SettingsPage'
 import { SettingsSidebar } from './components/SettingsSidebar'
 import { LiteratureDetailDrawer, type LiteratureDetailDrawerMode } from './components/LiteratureDetailDrawer'
 import { WorkbenchToolbar } from './components/WorkbenchToolbar'
+import { TableExportButtons } from './components/TableExportButtons'
 import { useAppConfig } from './hooks/useAppConfig'
 import { useAppTheme } from './hooks/useAppTheme'
 import { useAnalysisState } from './hooks/useAnalysisState'
@@ -447,6 +448,27 @@ export default function App() {
     if (!appId || !appSecret) return false
     return bitableUrl.length > 0
   }, [rawConfig.feishu])
+  const feishuBitableUrl = useMemo(() => {
+    const feishu = rawConfig.feishu
+    if (!feishu || typeof feishu !== 'object') return ''
+    const feishuObj = feishu as Record<string, unknown>
+    return typeof feishuObj.bitable_url === 'string' ? feishuObj.bitable_url.trim() : ''
+  }, [rawConfig.feishu])
+  const collectionItemKeys = useMemo(() => collectionItems.map((it) => it.item_key), [collectionItems])
+  const activeCollectionName = useMemo(() => {
+    if (!activeCollectionKey) return '文献'
+    const findName = (nodes: typeof library.collections): string | null => {
+      for (const node of nodes) {
+        if (node.key === activeCollectionKey) return node.name
+        if (node.children) {
+          const found = findName(node.children)
+          if (found) return found
+        }
+      }
+      return null
+    }
+    return findName(library.collections) || '文献'
+  }, [activeCollectionKey, library.collections])
   const { activeItem, canPrevDetail, canNextDetail, goPrevDetail, goNextDetail } = useDetailNavigation(
     library.items,
     filteredItems,
@@ -888,6 +910,16 @@ export default function App() {
                       onSortedDataChange={handleTableSortedDataChange}
                       activeItemKey={activeItemKey}
                     />
+                    {/* 导出按钮组 - 定位到分页器区域右侧 */}
+                    <div className="absolute bottom-2 right-4 z-10">
+                      <TableExportButtons
+                        selectedKeys={selectedRowKeys.map(String)}
+                        collectionKeys={collectionItemKeys}
+                        collectionName={activeCollectionName}
+                        feishuBitableUrl={feishuBitableUrl}
+                        allItems={library?.items || []}
+                      />
+                    </div>
                   </div>
                 </div>
               ) : (

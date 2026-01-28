@@ -600,23 +600,26 @@ export function SettingsPage({
                 <div ref={zoteroRef} data-section="zotero" id="settings-zotero" className="scroll-mt-6">
                   <div className="flex items-center gap-4">
                     <Typography.Title level={5} className="!mb-0 shrink-0">
-                      Zotero 数据目录
+                      基础设置
                     </Typography.Title>
-                    <Form.Item
-                      name={['zotero', 'data_dir']}
-                      rules={[{ required: true, message: '请输入 Zotero 数据目录' }]}
-                      className="!mb-0 flex-1"
-                    >
-                      <Input placeholder="C:\Users\<you>\Zotero" autoComplete="off" />
-                    </Form.Item>
                   </div>
                   <Typography.Paragraph type="secondary" className="!mt-2 !mb-0">
-                    填写 Zotero 的数据目录（需包含 `zotero.sqlite` 与 `storage/`）。
+                    配置应用的基础行为，包括 Zotero 数据目录与 PDF 阅读方式。
                   </Typography.Paragraph>
 
                   <Divider className="!my-4" />
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Form.Item
+                      label="Zotero 数据目录"
+                      name={['zotero', 'data_dir']}
+                      rules={[{ required: true, message: '请输入 Zotero 数据目录' }]}
+                      tooltip="需包含 `zotero.sqlite` 与 `storage/`"
+                      className="!mb-0"
+                    >
+                      <Input placeholder="C:\Users\<you>\Zotero" autoComplete="off" />
+                    </Form.Item>
+
                     <Form.Item
                       label="PDF 打开方式"
                       name={['ui', 'pdf_open_mode']}

@@ -266,6 +266,75 @@ export async function reconcileFeishu(itemKeys: string[]) {
 }
 
 /**
+ * Excel 导出结果
+ */
+export type ExportExcelResult = {
+  written: number
+  skipped: number
+  output_path: string
+  failures: string[]
+}
+
+/**
+ * PDF 导出结果
+ */
+export type ExportPdfsResult = {
+  exported: number
+  skipped_no_pdf: number
+  skipped_missing: number
+  output_dir: string
+  failures: string[]
+}
+
+/**
+ * 导出 Excel 文件
+ * 仅导出 processed_status === 'done' 的条目
+ */
+export async function exportExcel(params: {
+  outputPath: string
+  filename: string
+  keys: string[]
+}): Promise<ExportExcelResult> {
+  console.log('[exportExcel] Invoking export_excel with:', params)
+  try {
+    // Tauri 自动将 Rust 的 snake_case 参数名映射为 camelCase
+    const res = await invoke<ExportExcelResult>('export_excel', {
+      outputPath: params.outputPath,
+      filename: params.filename,
+      keys: params.keys,
+    })
+    console.log('[exportExcel] Success:', res)
+    return res
+  } catch (e) {
+    console.error('[exportExcel] Failed:', e)
+    throw normalizeInvokeError(e)
+  }
+}
+
+/**
+ * 导出 PDF 附件
+ * 按集合树结构复制 PDF 到目标目录
+ */
+export async function exportPdfs(params: {
+  outputDir: string
+  keys: string[]
+}): Promise<ExportPdfsResult> {
+  console.log('[exportPdfs] Invoking export_pdfs with:', params)
+  try {
+    // Tauri 自动将 Rust 的 snake_case 参数名映射为 camelCase
+    const res = await invoke<ExportPdfsResult>('export_pdfs', {
+      outputDir: params.outputDir,
+      keys: params.keys,
+    })
+    console.log('[exportPdfs] Success:', res)
+    return res
+  } catch (e) {
+    console.error('[exportPdfs] Failed:', e)
+    throw normalizeInvokeError(e)
+  }
+}
+
+/**
  * 删除已提取的数据
  * 包括清除本地分析结果和飞书对应记录
  */
