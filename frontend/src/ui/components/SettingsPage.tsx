@@ -386,40 +386,32 @@ export function SettingsPage({
   onAutoSave: () => void
 }) {
   const { modal, message: messageApi } = App.useApp()
-  const metaDefsWatched = Form.useWatch(['fields', 'meta_fields'], configForm) as Record<string, any> | undefined
-  const attachmentDefsWatched = Form.useWatch(['fields', 'attachment_fields'], configForm) as Record<string, any> | undefined
+
+  // 使用 useWatch 监听整个 fields 对象，确保能捕获到 meta_fields 的变化
+  const fieldsWatched = Form.useWatch('fields', configForm)
+  // 注意：不再将 configForm 作为依赖项，避免每次渲染都触发重算
+  // useWatch 已经订阅了字段变化，fieldsWatched 变化时会自动触发重算
   const metaDefs = useMemo(() => {
-    const v = metaDefsWatched ?? (configForm.getFieldValue(['fields', 'meta_fields']) as unknown)
+    const v = fieldsWatched?.meta_fields
     return v && typeof v === 'object' ? (v as Record<string, any>) : {}
-  }, [configForm, metaDefsWatched])
+  }, [fieldsWatched])
+
+  const attachmentDefsWatched = Form.useWatch(['fields', 'attachment_fields'], configForm) as Record<string, any> | undefined
   const attachmentDefs = useMemo(() => {
-    const v = attachmentDefsWatched ?? (configForm.getFieldValue(['fields', 'attachment_fields']) as unknown)
-    return v && typeof v === 'object' ? (v as Record<string, any>) : {}
-  }, [attachmentDefsWatched, configForm])
-  const metaOrderWatched = Form.useWatch(['fields', 'meta_order'], configForm)
+    return attachmentDefsWatched && typeof attachmentDefsWatched === 'object' ? attachmentDefsWatched : {}
+  }, [attachmentDefsWatched])
+  const metaOrderWatched = Form.useWatch(['fields', 'meta_order'], configForm) as string[] | undefined
   const feishuMetaSyncOptions = useMemo(() => {
     const fixed = new Set(['title', 'author', 'year', 'publications'])
-    const definedOrder = (metaOrderWatched as string[] | undefined) ?? (configForm.getFieldValue(['fields', 'meta_order']) as string[] | undefined)
-    const order = definedOrder && definedOrder.length > 0 ? definedOrder : FALLBACK_META_ORDER
+    const order = metaOrderWatched && metaOrderWatched.length > 0 ? metaOrderWatched : FALLBACK_META_ORDER
     const ordered = [...order, ...Object.keys(metaDefs).filter((k) => !order.includes(k))]
     const keys = ordered.filter((k) => !fixed.has(k))
-    const defaultCn: Record<string, string> = {
-      title: '标题',
-      author: '作者',
-      year: '年份',
-      type: '类型',
-      publications: '出版物',
-      abstract: '摘要',
-      tags: '标签',
-      collections: '集合',
-      url: 'URL',
-      doi: 'DOI',
-    }
+    // 字段中文名直接从 config.json 的 fields.meta_fields 读取，不再硬编码
     return keys.map((k) => ({
-      label: String((metaDefs as any)?.[k]?.name || '').trim() || defaultCn[k] || k,
+      label: String((metaDefs as any)?.[k]?.name || '').trim() || k,
       value: k,
     }))
-  }, [metaDefs])
+  }, [metaDefs, metaOrderWatched])
   const attachmentLabel = useMemo(() => {
     const v = attachmentDefs.attachment as Record<string, unknown> | undefined
     return String(v?.name ?? '').trim() || '附件'
@@ -668,7 +660,7 @@ export function SettingsPage({
                             parallel_count: 3,
                           },
                         })
-                        message.success('已还原默认推荐值')
+                        messageApi.success('已还原默认推荐值')
                       }}
                     >
                       还原默认
@@ -743,11 +735,29 @@ export function SettingsPage({
 
                   <Divider className="!my-4" />
 
-                  <Typography.Title level={5} className="!mb-2">
-                    同步元数据字段
-                  </Typography.Title>
+                  <div className="flex items-center justify-between">
+                    <Typography.Title level={5} className="!mb-2">
+                      同步/导出元数据字段
+                    </Typography.Title>
+                    <Button
+                      icon={<ReloadOutlined />}
+                      onClick={() => {
+                        const currentRules = configForm.getFieldValue('feishu') || {}
+                        configForm.setFieldsValue({
+                          feishu: {
+                            ...currentRules,
+                            attachment_sync: true,
+                            meta_sync: FALLBACK_META_ORDER.filter((k) => !['title', 'author', 'year', 'publications', 'doi', 'rating', 'progress'].includes(k))
+                          }
+                        })
+                        messageApi.success('已还原默认推荐值')
+                      }}
+                    >
+                      还原默认
+                    </Button>
+                  </div>
                   <Typography.Paragraph type="secondary" className="!mt-0">
-                    标题、作者、年份、出版物固定上传；其他字段可勾选是否同步（默认全部勾选，DOI 默认不勾选）。
+                    标题、作者、年份、出版物固定上传；其他字段可勾选是否同步（默认全部勾选，DOI/评分/进度 默认不勾选）。
                   </Typography.Paragraph>
 
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -762,7 +772,7 @@ export function SettingsPage({
 
                     <Form.Item
                       name={['feishu', 'meta_sync']}
-                      initialValue={FALLBACK_META_ORDER.filter((k) => !['title', 'author', 'year', 'publications', 'doi'].includes(k))}
+                      initialValue={FALLBACK_META_ORDER.filter((k) => !['title', 'author', 'year', 'publications', 'doi', 'rating', 'progress'].includes(k))}
                       className="!mb-0"
                     >
                       <Checkbox.Group
@@ -796,9 +806,19 @@ export function SettingsPage({
                             <Button
                               icon={<ReloadOutlined />}
                               onClick={() => {
-                                setExpandedFieldKey(null)
-                                fieldsForm.setFieldsValue({ analysis_fields: DEFAULT_ANALYSIS_FIELDS })
-                                onAutoSave()
+                                modal.confirm({
+                                  title: '确认还原默认配置？',
+                                  content: '这将重置所有分析字段定义与排序，自定义字段将丢失。',
+                                  okText: '确认还原',
+                                  okType: 'danger',
+                                  cancelText: '取消',
+                                  onOk: () => {
+                                    setExpandedFieldKey(null)
+                                    fieldsForm.setFieldsValue({ analysis_fields: DEFAULT_ANALYSIS_FIELDS })
+                                    onAutoSave()
+                                    messageApi.success('已还原默认推荐值')
+                                  }
+                                })
                               }}
                             >
                               还原默认

@@ -51,7 +51,7 @@ TYPE_MAPPING = {
 }
 
 
-FEISHU_META_FIXED_KEYS = {"title", "author", "year", "publications", "rating", "progress"}
+FEISHU_META_FIXED_KEYS = {"title", "author", "year", "publications"}
 
 LITERATURE_TYPE_LABELS_ZH: Dict[str, str] = {
     "journalArticle": "期刊文章",

@@ -5,7 +5,7 @@
  *           导出路径会持久化保存到 localStorage
  */
 import React, { useState, useEffect } from 'react'
-import { Modal, Radio, Input, message, Spin, Form, Typography, Alert, Button } from 'antd'
+import { Modal, Radio, Input, App, Spin, Form, Typography, Alert, Button } from 'antd'
 import type { RadioChangeEvent } from 'antd'
 import { FileExcelOutlined, FilePdfOutlined, FolderOpenOutlined } from '@ant-design/icons'
 import { open as openFolderDialog } from '@tauri-apps/plugin-dialog'
@@ -76,6 +76,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     collectionName = '文献',
     allItems,
 }) => {
+    const { message } = App.useApp()
     // 构建 item 查找表
     const itemMap = React.useMemo(() => {
         const map = new Map<string, LiteratureItem>()

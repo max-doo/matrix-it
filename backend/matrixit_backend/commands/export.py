@@ -79,11 +79,17 @@ def export_excel(
     meta_sync_raw = fc.get("meta_sync")
     if not isinstance(meta_sync_raw, list):
         meta_sync_raw = fc.get("metaSync") if isinstance(fc.get("metaSync"), list) else None
+    
+    # default_order 必须在 if/else 之前初始化，后续第 118 行会用到
+    default_order = fields_def.get("meta_order", [])
+    if not default_order:
+        default_order = ["title", "author", "year", "type", "publications", "rating", "progress", "impact_factor", "journal_tags", "tags", "collections", "url", "citation", "doi", "abstract"]
+    
     enabled_meta: set = set()
     if isinstance(meta_sync_raw, list):
         enabled_meta = set([str(x).strip() for x in meta_sync_raw if str(x).strip()])
     else:
-        enabled_meta = set([k for k in feishu.FEISHU_META_DEFAULT_ORDER if k != "doi"])
+        enabled_meta = set([k for k in default_order if k != "doi"])
     
     def _should_sync_meta_key(k: str) -> bool:
         if k in feishu.FEISHU_META_FIXED_KEYS:
@@ -112,7 +118,7 @@ def export_excel(
     meta_defs = fields_def.get("meta_fields", {}) if isinstance(fields_def.get("meta_fields", {}), dict) else {}
     analysis_defs = fields_def.get("analysis_fields", {}) if isinstance(fields_def.get("analysis_fields", {}), dict) else {}
     
-    meta_keys_ordered = _unique_keep_order(feishu.FEISHU_META_DEFAULT_ORDER + list(meta_defs.keys()))
+    meta_keys_ordered = _unique_keep_order(default_order + list(meta_defs.keys()))
     for k in meta_keys_ordered:
         if k not in meta_defs:
             continue
