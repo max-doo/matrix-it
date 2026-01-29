@@ -33,7 +33,6 @@ matrix-it/
 │  │     ├─ styles.css            # Tailwind 基础样式 + 少量全局样式
 │  │     ├─ defaults/
 │  │     │  ├─ analysisFields.ts  # 默认解析字段定义
-│  │     │  └─ metaColumnOrder.ts # 元数据字段默认显示顺序（列设置“恢复默认”使用）
 │  │     ├─ hooks/                # 状态管理 hooks（库刷新/引用/分析/设置/筛选/列配置/详情保存/详情导航）
 │  │     ├─ lib/                  # UI 侧轻量工具（storage/theme/collection utils）
 │  │     ├─ utils/
@@ -64,13 +63,21 @@ matrix-it/
 │
 ├─ backend/                       # Python 后端（sidecar 逻辑）
 │  ├─ matrixit_backend/
-│  │  ├─ sidecar.py               # sidecar CLI 入口：load_library/analyze/sync_feishu/update_item/format_citations
+│  │  ├─ sidecar.py               # sidecar CLI 入口（轻量级分发器，约 400 行）
+│  │  ├─ commands/                # 命令模块（模块化重构，懒加载重型依赖）
+│  │  │  ├─ library.py            # 库管理：load_library/resolve_pdf_path/update_item/get_items
+│  │  │  ├─ analyze.py            # 分析：analyze（串行/并行）+ LLM 调用逻辑
+│  │  │  ├─ feishu_cmd.py         # 飞书：sync_feishu/reconcile_feishu/delete_extracted_data
+│  │  │  ├─ citation_cmd.py       # 引用：format_citations/clear_citations
+│  │  │  └─ export.py             # 导出：export_excel/export_pdfs
 │  │  ├─ zotero.py                # Zotero：读取数据库、定位 storage PDF（不导出）、组装文献信息
 │  │  ├─ citation.py              # 引用：按 CSL 生成 GB/T 7714-2015（顺序编码）
 │  │  ├─ pdf.py                   # PDF：文本提取（pdfplumber）
 │  │  ├─ feishu.py                # 飞书：多维表格字段与数据同步（含附件上传）
 │  │  ├─ llm.py                   # LLM：OpenAI-Style Chat Completions 封装（返回 JSON）
+│  │  ├─ llm_async.py             # LLM：异步并行调用（aiohttp）
 │  │  ├─ prompt_builder.py        # Prompt：读取 prompts.md + config 中的 fields 组装分析提示词
+│  │  ├─ storage.py               # 存储：SQLite 数据库操作（items 表）
 │  │  ├─ config.py                # 配置：读取与校验（config/config.json + config/config.local.json 等）
 │  │  └─ jsonio.py                # JSON：读写本地状态文件（literature.json 等）
 │  ├─ requirements.txt            # Python 运行依赖

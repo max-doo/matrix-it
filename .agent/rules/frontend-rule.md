@@ -1,5 +1,5 @@
 ---
-trigger: model_decision
+trigger: always_on
 description: 前端开发规范，当进行前端开发时必须遵守
 ---
 
