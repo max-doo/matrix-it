@@ -53,7 +53,19 @@ matrix-it/
 │
 ├─ src-tauri/                     # 桌面壳（Tauri v2 / Rust）
 │  ├─ src/
-│  │  └─ main.rs                  # Tauri 命令入口：调用 sidecar 并向前端回传事件
+│  │  ├─ main.rs                  # Tauri 应用入口（轻量化，68 行）
+│  │  ├─ utils.rs                 # 通用工具：路径解析、环境变量设置
+│  │  ├─ db.rs                    # SQLite 数据库操作（同步版本，供 spawn_blocking 调用）
+│  │  ├─ error.rs                 # 统一错误类型定义
+│  │  └─ commands/                # Tauri IPC 命令模块（按领域拆分）
+│  │     ├─ mod.rs                # 命令模块入口
+│  │     ├─ zotero.rs             # Zotero 文件监控
+│  │     ├─ library.rs            # 文献库加载、条目更新（使用 spawn_blocking 包装 DB 操作）
+│  │     ├─ analysis.rs           # LLM 分析任务管理
+│  │     ├─ feishu.rs             # 飞书同步
+│  │     ├─ export.rs             # Excel/PDF 导出
+│  │     ├─ config.rs             # 配置读写（使用 spawn_blocking 包装文件 I/O）
+│  │     └─ common.rs             # PDF 路径解析、打开文件
 │  ├─ tauri.conf.json             # 桌面窗口配置（最小宽高、无系统标题栏等）
 │  ├─ capabilities/
 │  │  └─ default.json             # Tauri capabilities（允许调用/执行 sidecar 等）
