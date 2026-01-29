@@ -5,7 +5,7 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { Tree, Input, Button, Tooltip } from 'antd'
 import type { TreeDataNode } from 'antd'
-import { FolderOutlined, FolderOpenOutlined, SettingOutlined, SyncOutlined, InfoCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
+import { FolderOutlined, FolderOpenOutlined, SettingOutlined, SyncOutlined, QuestionCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import { openExternal } from '../../lib/backend'
 import type { CollectionNode, LiteratureItem } from '../../types'
 import { buildCollectionItemIndex, fuzzySubsequenceMatch, normalizeSearchText } from '../lib/collectionUtils'
@@ -252,7 +252,7 @@ export function ZoteroStatusFooter({
         <Button
           type="text"
           size="small"
-          icon={<InfoCircleOutlined />}
+          icon={<QuestionCircleOutlined />}
           onClick={() => {
             openExternal('https://example.com').catch(() => { })
           }}

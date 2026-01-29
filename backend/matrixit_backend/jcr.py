@@ -22,7 +22,8 @@ def get_jcr_db_path(config: dict) -> str:
 
     优先级:
     1. config["jcr"]["db_path"] (自定义路径)
-    2. 项目 data/jcr.db (默认路径)
+    2. sidecar 同级 resources/jcr.db (打包后路径)
+    3. 项目 data/jcr.db (开发环境默认路径)
 
     Args:
         config: 配置对象
@@ -37,13 +38,22 @@ def get_jcr_db_path(config: dict) -> str:
         if custom_path and Path(custom_path).exists():
             return str(Path(custom_path).resolve())
 
-    # 默认路径:项目 data/jcr.db
+    # 打包后路径：sidecar 同级 resources/jcr.db
+    # PyInstaller 打包后，__file__ 会指向临时目录，但可执行文件路径在 sys.executable
+    import sys
+    if getattr(sys, 'frozen', False):
+        # 打包后：sidecar.exe 同级的 resources/jcr.db
+        bundled_path = Path(sys.executable).parent / "resources" / "jcr.db"
+        if bundled_path.exists():
+            return str(bundled_path.resolve())
+
+    # 开发环境默认路径：项目 data/jcr.db
     project_root = Path(__file__).parent.parent.parent  # backend/matrixit_backend -> project root
     default_path = project_root / "data" / "jcr.db"
     if default_path.exists():
         return str(default_path.resolve())
 
-    # 开发环境回退路径
+    # 开发环境回退路径（绝对路径）
     alt_path = Path("d:/Project/matrix-it/data/jcr.db")
     if alt_path.exists():
         return str(alt_path.resolve())

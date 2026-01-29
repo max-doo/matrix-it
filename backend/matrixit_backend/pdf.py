@@ -12,38 +12,47 @@ import os
 import sys
 from typing import List, Optional
 
-import pdfplumber
+import pymupdf4llm
 
 
-def extract_pdf_text(pdf_path: str, max_pages: Optional[int] = 8) -> str:
+def extract_pdf_text(pdf_path: str, max_pages: Optional[int] = 100) -> str:
     """
-    从 PDF 文件中提取纯文本。
+    从 PDF 文件中提取 Markdown 格式文本。
     
-    使用 pdfplumber 并不保证完美还原，仅用于 LLM 分析上下文。
-    为防止超大文件导致内存溢出或处理超时，默认只读取前 8 页。
+    使用 pymupdf4llm 将 PDF 转换为结构化 Markdown，保留标题、表格和格式，
+    更利于大模型理解文献内容。
+    为防止超大文件导致内存溢出或处理超时，默认只读取前 100 页。
     
     Args:
         pdf_path: PDF 文件绝对路径
         max_pages: 最大提取页数 (None 表示读取全部)
         
     Returns:
-        解析出的文本内容 (按页拼接)；若文件不存在或解析失败，返回空字符串。
+        解析出的 Markdown 文本；若文件不存在或解析失败，返回空字符串。
     """
     if not pdf_path:
         return ""
     if not os.path.exists(pdf_path):
         return ""
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            parts: List[str] = []
-            for i, page in enumerate(pdf.pages):
-                if max_pages is not None and i >= max_pages:
-                    break
-                t = page.extract_text()
-                if t:
-                    parts.append(t)
-            return "\n".join(parts)
-    except Exception:
+        import pymupdf  # fitz
+        
+        # 先获取文档总页数，避免请求超出范围的页码
+        doc = pymupdf.open(pdf_path)
+        total_pages = doc.page_count
+        doc.close()
+        
+        # 构造有效的 pages 参数: 0-indexed 页码列表
+        pages_arg: Optional[List[int]] = None
+        if max_pages is not None:
+            actual_pages = min(max_pages, total_pages)
+            pages_arg = list(range(actual_pages))
+        
+        md_text: str = pymupdf4llm.to_markdown(pdf_path, pages=pages_arg)
+        return md_text if md_text else ""
+    except Exception as e:
+        sys.stderr.write(f"[PDF] extract_pdf_text error: {type(e).__name__}: {e}\n")
+        sys.stderr.flush()
         return ""
 
 
@@ -54,7 +63,7 @@ def main() -> None:
         sys.exit(1)
 
     pdf_path = sys.argv[1]
-    max_pages: Optional[int] = 8
+    max_pages: Optional[int] = 100
     if len(sys.argv) >= 3:
         arg = str(sys.argv[2]).strip().lower()
         if arg in {"none", "all"}:

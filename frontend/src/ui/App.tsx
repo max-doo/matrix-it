@@ -274,6 +274,7 @@ export default function App() {
     loadSettings,
     metaFieldDefs,
     analysisFieldDefs,
+    attachmentFieldDefs,
   } = useAppConfig(mode)
   const pdfOpenMode = useMemo(() => {
     const v = (rawConfig as Record<string, any> | undefined)?.ui?.pdf_open_mode
@@ -937,6 +938,8 @@ export default function App() {
                   onGoHome={() => setMode('workbench')}
                   onReload={loadSettings}
                   onAutoSave={scheduleAutoSaveSettings}
+                  metaFieldDefs={metaFieldDefs}
+                  attachmentFieldDefs={attachmentFieldDefs}
                 />
               )}
             </Content>

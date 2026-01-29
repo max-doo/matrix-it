@@ -1,11 +1,17 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MatrixIt",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.matrixit.app",
   "build": {
-    "beforeDevCommand": { "script": "npm run dev", "cwd": "../frontend" },
-    "beforeBuildCommand": { "script": "npm run build", "cwd": "../frontend" },
+    "beforeDevCommand": {
+      "script": "npm run dev",
+      "cwd": "../frontend"
+    },
+    "beforeBuildCommand": {
+      "script": "npm run build",
+      "cwd": "../frontend"
+    },
     "devUrl": "http://127.0.0.1:5174",
     "frontendDist": "../frontend/dist"
   },
@@ -29,7 +35,30 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.ico", "icons/icon.png"],
-    "externalBin": ["binaries/matrixit-sidecar"]
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "externalBin": [
+      "binaries/matrixit-sidecar"
+    ],
+    "resources": [
+      "resources/jcr.db"
+    ],
+    "windows": {
+      "wix": {
+        "language": {
+          "zh-CN": {
+            "localePath": "wix/locales/zh-CN.wxl"
+          }
+        },
+        "fragmentPaths": [
+          "wix/fragments/ui-custom.wxs"
+        ],
+        "componentRefs": [
+          "DesktopShortcut"
+        ]
+      }
+    }
   }
 }

@@ -3,7 +3,7 @@
 
 use crate::db;
 use crate::error::ApiError;
-use crate::utils::{ensure_sidecar_env, truncate_utf8_boundary};
+use crate::utils::ensure_sidecar_env;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri_plugin_shell::process::CommandChild;

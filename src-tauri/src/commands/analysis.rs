@@ -100,7 +100,7 @@ pub async fn start_analysis(
     let mut last_error: Option<String> = None;
     let mut was_cancelled = false;
 
-    let mut handle_json_line = |line: &str,
+    let handle_json_line = |line: &str,
                                  state: &tauri::State<'_, AnalysisState>,
                                  on_event: &Channel<AnalysisEvent>,
                                  db_path: &std::path::Path,

@@ -6,7 +6,7 @@
 import React, { useState } from 'react'
 import { Button, Dropdown, message, Space, Tooltip } from 'antd'
 import type { MenuProps } from 'antd'
-import { FileExcelOutlined, FilePdfOutlined, TableOutlined, ExportOutlined } from '@ant-design/icons'
+import { FileExcelOutlined, FilePdfOutlined, ExportOutlined, DownloadOutlined } from '@ant-design/icons'
 import { openExternal } from '../../lib/backend'
 import { ExportModal, type ExportType } from './ExportModal'
 import type { LiteratureItem } from '../../types'
@@ -81,7 +81,7 @@ export const TableExportButtons: React.FC<TableExportButtonsProps> = ({
     return (
         <>
             <Space size="small">
-                {/* 导出下拉按钮 - 只显示图标 */}
+                {/* 导出下拉按钮 */}
                 <Dropdown
                     menu={{ items: exportMenuItems }}
                     placement="topRight"
@@ -91,16 +91,16 @@ export const TableExportButtons: React.FC<TableExportButtonsProps> = ({
                 >
                     <Tooltip title="导出" open={dropdownOpen ? false : undefined}>
                         <Button
-                            icon={<ExportOutlined />}
+                            icon={<DownloadOutlined style={{ color: 'var(--primary-color)', fontSize: '18px' }} />}
                         />
                     </Tooltip>
                 </Dropdown>
 
-                {/* 打开飞书多维表格按钮 - 只显示图标 */}
+                {/* 打开飞书多维表格按钮 */}
                 {feishuBitableUrl && (
                     <Tooltip title="打开飞书多维表格">
                         <Button
-                            icon={<TableOutlined style={{ color: '#1890ff' }} />}
+                            icon={<ExportOutlined style={{ color: 'var(--primary-color)' }} />}
                             onClick={handleOpenFeishu}
                         />
                     </Tooltip>

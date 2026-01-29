@@ -15,7 +15,7 @@
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-opener": "^2.0.0",
-    "antd": "^5.29.3",
+    "antd": "^6.0.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

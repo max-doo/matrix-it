@@ -296,6 +296,11 @@ export function useAppConfig(mode: 'workbench' | 'settings') {
         [fieldsDef.analysis_fields]
     )
 
+    const attachmentFieldDefs = useMemo(
+        () => ((fieldsDef.attachment_fields as Record<string, unknown>) ?? {}) as Record<string, unknown>,
+        [fieldsDef.attachment_fields]
+    )
+
 
     return {
         rawConfig,
@@ -314,6 +319,7 @@ export function useAppConfig(mode: 'workbench' | 'settings') {
         saveSettingsNow, // 可以不需要暴露，因为 scheduleAutoSaveSettings 已经够了，但是 SettingsPage 可能会手动保存？
         loadSettings,
         metaFieldDefs,
-        analysisFieldDefs
+        analysisFieldDefs,
+        attachmentFieldDefs
     }
 }

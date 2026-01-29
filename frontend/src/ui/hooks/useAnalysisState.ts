@@ -66,6 +66,8 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
         const closeAnalysis = () => {
             if (closed) return
             closed = true
+            // 先清除 loading 消息，避免不同 message 上下文不共享 key
+            message.destroy(msgKey)
             if (finishedFetchTimer !== null) {
                 window.clearTimeout(finishedFetchTimer)
                 finishedFetchTimer = null
@@ -257,6 +259,8 @@ export function useAnalysisState<T extends { items: LiteratureItem[] }>(
             }
         } catch (e) {
             const msg = e instanceof Error ? e.message : '启动分析失败'
+            // 确保 loading 消息被清除
+            message.destroy(msgKey)
             setAnalysisInProgress(false)
             analysisInProgressRef.current = false
             setLibrary((prev) => ({

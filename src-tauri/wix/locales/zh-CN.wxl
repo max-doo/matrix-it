@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="zh-CN" xmlns="http://schemas.microsoft.com/wix/2006/localization">
+  <!-- 应用程序名称 -->
+  <String Id="ApplicationName">MatrixIt</String>
+  
+  <!-- 立即打开选项文本 -->
+  <String Id="LaunchApp">启动 MatrixIt</String>
+  <String Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT">立即打开 MatrixIt</String>
+  
+  <!-- 安装功能描述 -->
+  <String Id="InstallAppFeature">安装 MatrixIt 文献管理工具。</String>
+  
+  <!-- 降级错误提示 -->
+  <String Id="DowngradeErrorMessage">已安装更新版本的 MatrixIt，无法继续安装。</String>
+  
+  <!-- PATH 环境变量功能描述 -->
+  <String Id="PathEnvVarFeature">将 MatrixIt 可执行文件的安装位置添加到 PATH 系统环境变量中。这允许从任何位置调用 MatrixIt。</String>
+  
+  <!-- WixUI_InstallDir 对话框中文化 -->
+  <String Id="WelcomeDlgTitle">欢迎使用 [ProductName] 安装向导</String>
+  <String Id="WelcomeDlgDescription">安装向导将在您的计算机上安装 [ProductName]。单击"下一步"继续或单击"取消"退出安装向导。</String>
+  
+  <String Id="LicenseAgreementDlgTitle">许可协议</String>
+  <String Id="LicenseAgreementDlgDescription">请阅读以下许可协议。您必须接受此协议中的条款才能继续安装。</String>
+  
+  <String Id="InstallDirDlgTitle">选择安装位置</String>
+  <String Id="InstallDirDlgDescription">安装向导将把 [ProductName] 安装到以下文件夹。</String>
+  <String Id="InstallDirDlgBrowseText">要安装到其他文件夹，请单击"浏览"并选择其他文件夹。单击"下一步"继续。</String>
+  <String Id="InstallDirDlgChange">更改(&amp;C)...</String>
+  
+  <String Id="VerifyReadyDlgTitle">准备安装</String>
+  <String Id="VerifyReadyDlgDescription">安装向导已准备好开始安装。</String>
+  <String Id="VerifyReadyDlgInstall">单击"安装"开始安装。如果您想要查看或更改任何设置，请单击"上一步"。单击"取消"退出安装向导。</String>
+  
+  <String Id="ProgressDlgTitleInstalling">正在安装 [ProductName]</String>
+  <String Id="ProgressDlgTextInstalling">请稍候，安装程序正在安装 [ProductName]。此过程可能需要几分钟。</String>
+  
+  <String Id="ExitDlgTitle">完成 [ProductName] 安装向导</String>
+  <String Id="ExitDlgDescription">安装向导已成功安装 [ProductName]。单击"完成"退出安装向导。</String>
+  
+  <!-- 按钮文本 -->
+  <String Id="WixUIBack">上一步(&amp;B)</String>
+  <String Id="WixUINext">下一步(&amp;N)</String>
+  <String Id="WixUICancel">取消</String>
+  <String Id="WixUIFinish">完成(&amp;F)</String>
+  <String Id="WixUIInstall">安装(&amp;I)</String>
+  <String Id="WixUIBrowse">浏览(&amp;R)...</String>
+  
+  <!-- 文件夹名称 -->
+  <String Id="FolderForm_ProgramFilesFolderName">Program Files</String>
+</WixLocalization>

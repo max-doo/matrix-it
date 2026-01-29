@@ -1,7 +1,7 @@
 //! SQLite 数据库操作模块
 //! 封装 matrixit.db 的读写操作，支持在 spawn_blocking 中安全调用
 
-use crate::utils::{find_project_root, resolve_data_dir_path, resolve_matrixit_db_path};
+use crate::utils::{find_project_root, resolve_data_dir_path};
 use rusqlite::Connection;
 use serde_json::Value;
 use std::path::Path;

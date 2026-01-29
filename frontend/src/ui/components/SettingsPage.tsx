@@ -30,7 +30,7 @@ import {
 import { DEFAULT_ANALYSIS_FIELDS } from '../defaults/analysisFields'
 
 import { App, Space, Segmented, Collapse, Tooltip, message } from 'antd'
-import { QuestionCircleOutlined, ThunderboltOutlined, EditOutlined, ApiOutlined, CloudServerOutlined, LinkOutlined } from '@ant-design/icons'
+import { QuestionCircleOutlined, ThunderboltOutlined, EditOutlined, ApiOutlined, CloudServerOutlined, LinkOutlined, PaperClipOutlined } from '@ant-design/icons'
 import { listModels, openExternal, purgeItemField } from '../../lib/backend'
 
 const FALLBACK_META_ORDER = ['title', 'author', 'year', 'type', 'publications', 'rating', 'progress', 'impact_factor', 'journal_tags', 'abstract', 'tags', 'collections', 'url', 'doi']
@@ -140,7 +140,7 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
         model: [],
         // 保持一些通用设置的默认值
         temperature: 0.5,
-        max_input_chars: 100000,
+        max_input_chars: 500000,
         max_pdf_bytes: 20 * 1024 * 1024,
         multimodal: false,
         parallel_count: 3,
@@ -331,7 +331,7 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
                 name={['llm', 'max_input_chars']}
                 tooltip="单次对话允许发送的最大字符数，超出将截断。"
               >
-                <InputNumber min={1000} max={1000000} step={1000} className="w-full" placeholder="100000" />
+                <InputNumber min={1000} max={1000000} step={1000} className="w-full" placeholder="500000" />
               </Form.Item>
               <Form.Item
                 label="PDF大小"
@@ -373,6 +373,8 @@ export function SettingsPage({
   onGoHome,
   onReload,
   onAutoSave,
+  metaFieldDefs,
+  attachmentFieldDefs,
 }: {
   configForm: FormInstance
   fieldsForm: FormInstance
@@ -384,29 +386,28 @@ export function SettingsPage({
   onGoHome: () => void
   onReload: () => void
   onAutoSave: () => void
+  /** 元数据字段定义（从 rawConfig.fields.meta_fields 传入） */
+  metaFieldDefs: Record<string, unknown>
+  /** 附件字段定义（从 rawConfig.fields.attachment_fields 传入） */
+  attachmentFieldDefs: Record<string, unknown>
 }) {
   const { modal, message: messageApi } = App.useApp()
 
-  // 使用 useWatch 监听整个 fields 对象，确保能捕获到 meta_fields 的变化
-  const fieldsWatched = Form.useWatch('fields', configForm)
-  // 注意：不再将 configForm 作为依赖项，避免每次渲染都触发重算
-  // useWatch 已经订阅了字段变化，fieldsWatched 变化时会自动触发重算
+  // 使用从 props 传入的字段定义 (从 rawConfig.fields 计算)，避免 Form.useWatch 无法监听未绑定字段的问题
   const metaDefs = useMemo(() => {
-    const v = fieldsWatched?.meta_fields
-    return v && typeof v === 'object' ? (v as Record<string, any>) : {}
-  }, [fieldsWatched])
+    return metaFieldDefs && typeof metaFieldDefs === 'object' ? (metaFieldDefs as Record<string, any>) : {}
+  }, [metaFieldDefs])
 
-  const attachmentDefsWatched = Form.useWatch(['fields', 'attachment_fields'], configForm) as Record<string, any> | undefined
   const attachmentDefs = useMemo(() => {
-    return attachmentDefsWatched && typeof attachmentDefsWatched === 'object' ? attachmentDefsWatched : {}
-  }, [attachmentDefsWatched])
+    return attachmentFieldDefs && typeof attachmentFieldDefs === 'object' ? (attachmentFieldDefs as Record<string, any>) : {}
+  }, [attachmentFieldDefs])
   const metaOrderWatched = Form.useWatch(['fields', 'meta_order'], configForm) as string[] | undefined
   const feishuMetaSyncOptions = useMemo(() => {
     const fixed = new Set(['title', 'author', 'year', 'publications'])
     const order = metaOrderWatched && metaOrderWatched.length > 0 ? metaOrderWatched : FALLBACK_META_ORDER
     const ordered = [...order, ...Object.keys(metaDefs).filter((k) => !order.includes(k))]
     const keys = ordered.filter((k) => !fixed.has(k))
-    // 字段中文名直接从 config.json 的 fields.meta_fields 读取，不再硬编码
+    // 字段中文名直接从 props 的 metaFieldDefs 读取
     return keys.map((k) => ({
       label: String((metaDefs as any)?.[k]?.name || '').trim() || k,
       value: k,
@@ -654,12 +655,13 @@ export function SettingsPage({
                             ...currentLlm,
                             base_url: defaultBaseUrl, // 还原 Base URL
                             temperature: 0.5,
-                            max_input_chars: 100000,
+                            max_input_chars: 500000,
                             max_pdf_bytes: 20 * 1024 * 1024,
                             multimodal: false,
                             parallel_count: 3,
                           },
                         })
+                        onAutoSave()
                         messageApi.success('已还原默认推荐值')
                       }}
                     >
@@ -750,6 +752,7 @@ export function SettingsPage({
                             meta_sync: FALLBACK_META_ORDER.filter((k) => !['title', 'author', 'year', 'publications', 'doi', 'rating', 'progress'].includes(k))
                           }
                         })
+                        onAutoSave()
                         messageApi.success('已还原默认推荐值')
                       }}
                     >
@@ -765,18 +768,24 @@ export function SettingsPage({
                       name={['feishu', 'attachment_sync']}
                       valuePropName="checked"
                       initialValue={true}
-                      className="!mb-0"
+                      noStyle
                     >
-                      <Checkbox>{attachmentLabel}</Checkbox>
+                      <Checkbox>
+                        <span className="inline-flex items-center gap-1">
+                          {attachmentLabel}
+                          <PaperClipOutlined className="text-slate-400" />
+                        </span>
+                      </Checkbox>
                     </Form.Item>
 
                     <Form.Item
                       name={['feishu', 'meta_sync']}
                       initialValue={FALLBACK_META_ORDER.filter((k) => !['title', 'author', 'year', 'publications', 'doi', 'rating', 'progress'].includes(k))}
-                      className="!mb-0"
+                      noStyle
                     >
                       <Checkbox.Group
                         className="flex flex-wrap items-center gap-x-4 gap-y-2"
+                        style={{ display: 'contents' }}
                         options={feishuMetaSyncOptions}
                       />
                     </Form.Item>

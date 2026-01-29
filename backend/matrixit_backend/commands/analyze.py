@@ -450,12 +450,12 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
     if env_llm_trace in ("0", "false", "no", "off"):
         llm_trace = False
 
-    llm_trace_user_max_chars = 500
+    llm_trace_user_max_chars = 1000
     if isinstance(debug_cfg.get("llm_trace_user_max_chars"), (int, float, str)):
         try:
             llm_trace_user_max_chars = int(debug_cfg.get("llm_trace_user_max_chars"))
         except Exception:
-            llm_trace_user_max_chars = 500
+            llm_trace_user_max_chars = 1000
     env_llm_trace_user_max = str(os.environ.get("MATRIXIT_LLM_TRACE_USER_MAX") or "").strip()
     if env_llm_trace_user_max:
         try:

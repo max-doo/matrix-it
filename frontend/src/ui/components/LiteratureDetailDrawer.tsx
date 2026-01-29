@@ -415,7 +415,7 @@ export function LiteratureDetailDrawer({
   }, [hasPdfAttachment, item, itemKey, modal, originalHref, pdfOpenMode])
 
   const readOriginalButton = (
-    <Button icon={<ReadOutlined />} onClick={() => void handleOpenOriginal()} disabled={readOriginalDisabled}>
+    <Button icon={<ReadOutlined style={{ color: 'var(--primary-color)' }} />} onClick={() => void handleOpenOriginal()} disabled={readOriginalDisabled}>
       阅读原文
     </Button>
   )

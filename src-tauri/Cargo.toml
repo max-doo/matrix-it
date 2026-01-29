@@ -1,6 +1,6 @@
 [package]
 name = "matrixit"
-version = "0.1.0"
+version = "1.0.0"
 description = "MatrixIt Tauri App"
 authors = ["MatrixIt"]
 edition = "2021"
