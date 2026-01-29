@@ -17,6 +17,8 @@
 [data-tauri-drag-region] [role="button"],
 [data-tauri-drag-region] .ant-btn,
 [data-tauri-drag-region] .ant-space,
+[data-tauri-drag-region] .ant-select,
+[data-tauri-drag-region] .ant-select-selector,
 [data-tauri-no-drag],
 /* Ant Design Portal 组件全局禁用拖拽，避免弹出层与窗口拖拽冲突 */
 .ant-popover,

@@ -302,6 +302,7 @@ export default function App() {
     tableMetaColumns,
     tableAnalysisColumns,
     citationColumnVisible,
+    defaultMetaOrder,
   } = useColumnConfig(rawConfig, setRawConfig, metaFieldDefs, analysisFieldDefs, activeView)
   const { detailCitationState } = useCitationManager(library, setLibrary, {
     activeItemKey,
@@ -870,6 +871,7 @@ export default function App() {
                         metaFieldDefs={metaFieldDefs}
                         analysisFieldDefs={analysisFieldDefs}
                         matrixAnalysisSettingsOrder={matrixAnalysisSettingsOrder}
+                        defaultMetaOrder={defaultMetaOrder}
                         getFieldName={getFieldName}
                         applyMetaPanelChange={applyMetaPanelChange}
                         applyAnalysisPanelChange={applyAnalysisPanelChange}
@@ -906,6 +908,7 @@ export default function App() {
                       onSelectedRowKeysChange={setSelectedRowKeys}
                       onOpenDetail={(key) => void requestOpenDetail(key)}
                       onRefresh={handleRefresh}
+                      onItemPatch={saveMatrixPatch}
                       onPageRowsChange={setCurrentPageRows}
                       onSortedDataChange={handleTableSortedDataChange}
                       activeItemKey={activeItemKey}
@@ -960,6 +963,7 @@ export default function App() {
                     ? saveMatrixPatch
                     : undefined
                 }
+                onItemPatch={saveMatrixPatch}
               />
             </>
           ) : null}

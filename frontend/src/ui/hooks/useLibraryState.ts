@@ -30,11 +30,24 @@ export function useLibraryState(analysisInProgressRef: React.MutableRefObject<bo
     const [refreshError, setRefreshError] = useState<string | null>(null)
     const [lastRefreshAt, setLastRefreshAt] = useState<number | null>(() => readLibraryCache()?.savedAt ?? null)
 
+    // 防止并发刷新：如果正在刷新，忽略新的刷新请求
+    const refreshInFlightRef = useRef(false)
+
     /**
      * 刷新文献库数据
+     * 防止并发刷新：如果正在刷新，忽略新请求
      */
     const refreshLibrary = useCallback(
         async (trigger: 'auto' | 'manual') => {
+            // 防止并发刷新：如果正在刷新中
+            if (refreshInFlightRef.current) {
+                if (trigger === 'manual') {
+                    message.info('正在刷新中，请稍候...')
+                }
+                return
+            }
+
+            refreshInFlightRef.current = true
             const msgKey = 'matrixit.library.refresh'
             setRefreshingLibrary(true)
             setRefreshError(null)
@@ -90,6 +103,7 @@ export function useLibraryState(analysisInProgressRef: React.MutableRefObject<bo
                 if (trigger === 'manual') message.error({ content: msg })
                 else message.error(msg)
             } finally {
+                refreshInFlightRef.current = false
                 setRefreshingLibrary(false)
             }
         },
@@ -104,6 +118,17 @@ export function useLibraryState(analysisInProgressRef: React.MutableRefObject<bo
     useEffect(() => {
         const cached = readLibraryCache()
         if (cached) setLastRefreshAt(cached.savedAt)
+
+        // F5 防抖：如果距离上次初始化刷新不到 2 秒，跳过（防止频繁刷新页面导致后端压力）
+        const LAST_INIT_KEY = 'matrixit_last_init_refresh'
+        const lastInit = localStorage.getItem(LAST_INIT_KEY)
+        const now = Date.now()
+        if (lastInit && now - parseInt(lastInit, 10) < 2000) {
+            console.log('[useLibraryState] 防止 F5 频繁刷新，跳过本次初始化加载')
+            return
+        }
+        localStorage.setItem(LAST_INIT_KEY, now.toString())
+
         refreshLibrary('auto')
     }, [refreshLibrary])
 

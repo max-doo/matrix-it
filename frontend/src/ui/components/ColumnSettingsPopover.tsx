@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Popover } from 'antd'
 import { BarsOutlined, EyeInvisibleOutlined, EyeOutlined, HolderOutlined } from '@ant-design/icons'
-import { DEFAULT_META_COLUMN_ORDER } from '../defaults/metaColumnOrder'
+
+
 
 export type ColumnPanelGroup = 'meta' | 'analysis'
 
@@ -24,6 +25,7 @@ export type ColumnSettingsPopoverProps = {
   metaFieldDefs: Record<string, unknown>
   analysisFieldDefs: Record<string, unknown>
   matrixAnalysisSettingsOrder: string[]
+  defaultMetaOrder: string[]
   getFieldName: (defs: Record<string, unknown>, key: string) => string
   applyMetaPanelChange: (nextKeys: string[], nextHidden: Set<string>) => Promise<void>
   applyAnalysisPanelChange: (nextKeys: string[], nextHidden: Set<string>) => Promise<void>
@@ -38,6 +40,7 @@ export function ColumnSettingsPopover({
   metaFieldDefs,
   analysisFieldDefs,
   matrixAnalysisSettingsOrder,
+  defaultMetaOrder,
   getFieldName,
   applyMetaPanelChange,
   applyAnalysisPanelChange,
@@ -85,7 +88,7 @@ export function ColumnSettingsPopover({
 
   const resetMetaDefaults = useCallback(async () => {
     const allKeys = metaPanel.allKeys
-    const ordered = DEFAULT_META_COLUMN_ORDER.filter((k) => allKeys.includes(k) && k !== 'title')
+    const ordered = defaultMetaOrder.filter((k) => allKeys.includes(k) && k !== 'title')
     const rest = allKeys.filter((k) => k !== 'title' && !ordered.includes(k))
     const nextKeys = [...ordered, ...rest]
     setDraftKeys((prev) => ({ ...prev, meta: nextKeys }))

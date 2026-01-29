@@ -28,10 +28,12 @@ import {
 } from '@ant-design/icons'
 
 import { DEFAULT_ANALYSIS_FIELDS } from '../defaults/analysisFields'
-import { DEFAULT_META_COLUMN_ORDER } from '../defaults/metaColumnOrder'
+
 import { App, Space, Segmented, Collapse, Tooltip, message } from 'antd'
 import { QuestionCircleOutlined, ThunderboltOutlined, EditOutlined, ApiOutlined, CloudServerOutlined, LinkOutlined } from '@ant-design/icons'
 import { listModels, openExternal, purgeItemField } from '../../lib/backend'
+
+const FALLBACK_META_ORDER = ['title', 'author', 'year', 'type', 'publications', 'rating', 'progress', 'impact_factor', 'journal_tags', 'abstract', 'tags', 'collections', 'url', 'doi']
 
 const PROVIDERS = [
   { label: '自定义 (Custom)', value: 'custom', baseUrl: '' },
@@ -394,9 +396,12 @@ export function SettingsPage({
     const v = attachmentDefsWatched ?? (configForm.getFieldValue(['fields', 'attachment_fields']) as unknown)
     return v && typeof v === 'object' ? (v as Record<string, any>) : {}
   }, [attachmentDefsWatched, configForm])
+  const metaOrderWatched = Form.useWatch(['fields', 'meta_order'], configForm)
   const feishuMetaSyncOptions = useMemo(() => {
     const fixed = new Set(['title', 'author', 'year', 'publications'])
-    const ordered = [...DEFAULT_META_COLUMN_ORDER, ...Object.keys(metaDefs).filter((k) => !DEFAULT_META_COLUMN_ORDER.includes(k))]
+    const definedOrder = (metaOrderWatched as string[] | undefined) ?? (configForm.getFieldValue(['fields', 'meta_order']) as string[] | undefined)
+    const order = definedOrder && definedOrder.length > 0 ? definedOrder : FALLBACK_META_ORDER
+    const ordered = [...order, ...Object.keys(metaDefs).filter((k) => !order.includes(k))]
     const keys = ordered.filter((k) => !fixed.has(k))
     const defaultCn: Record<string, string> = {
       title: '标题',
@@ -757,7 +762,7 @@ export function SettingsPage({
 
                     <Form.Item
                       name={['feishu', 'meta_sync']}
-                      initialValue={DEFAULT_META_COLUMN_ORDER.filter((k) => !['title', 'author', 'year', 'publications', 'doi'].includes(k))}
+                      initialValue={FALLBACK_META_ORDER.filter((k) => !['title', 'author', 'year', 'publications', 'doi'].includes(k))}
                       className="!mb-0"
                     >
                       <Checkbox.Group

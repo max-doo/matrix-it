@@ -61,6 +61,8 @@ export type LiteratureItem = {
   highlights?: string
   limitations?: string
   inspiration?: string
+  progress?: string | null
+  rating?: string | null
 }
 
 /**

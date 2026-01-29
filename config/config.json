@@ -119,9 +119,17 @@
         "name": "期刊标签",
         "type": "multi_select"
       },
+      "progress": {
+        "name": "进度",
+        "type": "select"
+      },
       "publications": {
         "name": "出版物",
         "type": "string"
+      },
+      "rating": {
+        "name": "评分",
+        "type": "select"
       },
       "tags": {
         "name": "标签",
@@ -143,7 +151,24 @@
         "name": "年份",
         "type": "number"
       }
-    }
+    },
+    "meta_order": [
+      "title",
+      "author",
+      "year",
+      "type",
+      "publications",
+      "rating",
+      "progress",
+      "impact_factor",
+      "journal_tags",
+      "tags",
+      "collections",
+      "url",
+      "citation",
+      "doi",
+      "abstract"
+    ]
   },
   "llm": {
     "api_key": "",
@@ -166,7 +191,7 @@
         ],
         "multimodal": false,
         "parallel_count": 3,
-        "temperature": 0.6
+        "temperature": 0.9
       },
       "dashscope": {
         "api_key": "",
@@ -297,6 +322,8 @@
             "year",
             "type",
             "publications",
+            "rating",
+            "progress",
             "impact_factor",
             "journal_tags"
           ]
@@ -310,6 +337,8 @@
             "year",
             "type",
             "publications",
+            "rating",
+            "progress",
             "impact_factor",
             "journal_tags",
             "tags"

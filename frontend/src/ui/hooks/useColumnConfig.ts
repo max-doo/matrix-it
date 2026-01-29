@@ -7,7 +7,7 @@ import { useCallback, useMemo } from 'react'
 import { message } from 'antd'
 import type { LiteratureTableColumnOption } from '../components/LiteratureTable'
 import { saveConfig } from '../../lib/backend'
-import { DEFAULT_META_COLUMN_ORDER } from '../defaults/metaColumnOrder'
+
 
 export function useColumnConfig(
     rawConfig: Record<string, unknown>,
@@ -44,6 +44,10 @@ export function useColumnConfig(
 
             const orderRaw = uiObj.order
             const hiddenRaw = uiObj.hidden
+            if (!Array.isArray(orderRaw) && !Array.isArray(hiddenRaw)) {
+                return normalizedDefault
+            }
+
             const order = Array.isArray(orderRaw) ? (orderRaw as string[]).filter((k) => allKeys.includes(k)) : allKeys
             const hidden = new Set(Array.isArray(hiddenRaw) ? (hiddenRaw as string[]).filter((k) => allKeys.includes(k)) : [])
             hidden.delete('title')
@@ -113,13 +117,16 @@ export function useColumnConfig(
     )
 
     const metaColumnPanel = useMemo(() => {
-        const primaryKeys = ['title', 'author', 'year', 'type', 'publications', 'impact_factor', 'journal_tags', 'tags']
+        const fieldsCfg = (rawConfig.fields as Record<string, unknown>) ?? {}
+        const metaOrder = Array.isArray(fieldsCfg.meta_order) ? (fieldsCfg.meta_order as string[]) : undefined
+        const primaryKeys = metaOrder && metaOrder.length > 0 ? metaOrder : ['title', 'author', 'year', 'type', 'publications', 'rating', 'progress', 'impact_factor', 'journal_tags', 'tags']
         const allKeys = primaryKeys.filter((k) => {
+            if (['collections', 'url', 'citation', 'doi', 'abstract'].includes(k)) return false
             if (activeView === 'matrix' && k === 'tags') return false
             if (['year', 'author', 'type', 'publications', 'impact_factor', 'journal_tags'].includes(k)) return true
             return k in metaFieldDefs || k === 'tags'
         })
-        const defaultVisible = DEFAULT_META_COLUMN_ORDER.filter((k) => allKeys.includes(k))
+        const defaultVisible = ['title', 'author', 'year', 'type', 'publications', 'rating', 'progress', 'impact_factor', 'journal_tags', 'tags'].filter((k) => allKeys.includes(k))
         const viewUi = (uiTableColumns as Record<string, unknown>)[activeView] as Record<string, unknown> | undefined
         const metaUi = (viewUi?.meta as Record<string, unknown>) ?? {}
         const visible = readVisibleKeys(metaUi, allKeys, defaultVisible, true)
@@ -194,13 +201,16 @@ export function useColumnConfig(
     }, [])
 
     const tableMetaColumns = useMemo<LiteratureTableColumnOption[]>(() => {
-        const primaryKeys = ['title', 'author', 'year', 'type', 'publications', 'impact_factor', 'journal_tags', 'tags']
+        const fieldsCfg = (rawConfig.fields as Record<string, unknown>) ?? {}
+        const metaOrder = Array.isArray(fieldsCfg.meta_order) ? (fieldsCfg.meta_order as string[]) : undefined
+        const primaryKeys = metaOrder && metaOrder.length > 0 ? metaOrder : ['title', 'author', 'year', 'type', 'publications', 'rating', 'progress', 'impact_factor', 'journal_tags', 'tags']
         const allKeys = primaryKeys.filter((k) => {
+            if (['collections', 'url', 'citation', 'doi', 'abstract'].includes(k)) return false
             if (activeView === 'matrix' && k === 'tags') return false
             if (['year', 'author', 'type', 'publications', 'impact_factor', 'journal_tags'].includes(k)) return true
             return k in metaFieldDefs || k === 'tags'
         })
-        const defaultVisible = DEFAULT_META_COLUMN_ORDER.filter((k) => allKeys.includes(k))
+        const defaultVisible = ['title', 'author', 'year', 'type', 'publications', 'rating', 'progress', 'impact_factor', 'journal_tags', 'tags'].filter((k) => allKeys.includes(k))
         const viewUi = (uiTableColumns as Record<string, unknown>)[activeView] as Record<string, unknown> | undefined
         const metaUi = (viewUi?.meta as Record<string, unknown>) ?? {}
         const visible = readVisibleKeys(metaUi, allKeys, defaultVisible, true)
@@ -238,5 +248,10 @@ export function useColumnConfig(
         tableMetaColumns,
         tableAnalysisColumns,
         citationColumnVisible,
+        defaultMetaOrder: (() => {
+            const fieldsCfg = (rawConfig.fields as Record<string, unknown>) ?? {}
+            const metaOrder = Array.isArray(fieldsCfg.meta_order) ? (fieldsCfg.meta_order as string[]) : undefined
+            return metaOrder && metaOrder.length > 0 ? metaOrder : ['title', 'author', 'year', 'type', 'publications', 'rating', 'progress', 'impact_factor', 'journal_tags', 'tags']
+        })(),
     }
 }

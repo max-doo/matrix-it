@@ -340,26 +340,68 @@ fn stop_zotero_watch(state: tauri::State<ZoteroWatchState>) -> Result<(), ApiErr
   Ok(())
 }
 
+// 新增 LoadLibraryState 结构体（放到 AnalysisState 附近）
+struct LoadLibraryState(Mutex<Option<CommandChild>>);
+
 #[tauri::command]
-async fn load_library(app: tauri::AppHandle) -> Result<LoadLibraryResponse, ApiError> {
+async fn load_library(
+  app: tauri::AppHandle,
+  state: tauri::State<'_, LoadLibraryState>,
+) -> Result<LoadLibraryResponse, ApiError> {
   ensure_sidecar_env();
-  let output = app
+
+  // 1. 终止之前的进程（如果存在）
+  {
+    let mut guard = state.0.lock().map_err(|_| ApiError::new("LOCK_POISONED", "State lock failed"))?;
+    if let Some(child) = guard.take() {
+      // 尝试终止旧进程。忽略错误（可能进程已结束）
+      let _ = child.kill(); 
+    }
+  }
+
+  // 2. 启动新进程
+  let (mut rx, child) = app
     .shell()
     .sidecar("matrixit-sidecar")
     .map_err(|e| ApiError::new("SIDE_CAR_NOT_FOUND", e.to_string()))?
     .arg("load_library")
-    .output()
-    .await
-    .map_err(|e| ApiError::new("SIDE_CAR_EXEC_FAILED", e.to_string()))?;
+    .spawn()
+    .map_err(|e| ApiError::new("SIDE_CAR_SPAWN_FAILED", e.to_string()))?;
 
-  if !output.status.success() {
-    return Err(ApiError::new(
-      "SIDE_CAR_NON_ZERO",
-      String::from_utf8_lossy(&output.stderr).to_string(),
-    ));
+  // 3. 保存新进程句柄
+  {
+    let mut guard = state.0.lock().map_err(|_| ApiError::new("LOCK_POISONED", "State lock failed"))?;
+    *guard = Some(child);
   }
 
-  let stdout = String::from_utf8(output.stdout).map_err(|e| ApiError::new("UTF8", e.to_string()))?;
+  // 4. 异步读取输出
+  let mut stdout_buf = Vec::new();
+  let mut stderr_buf = Vec::new();
+  
+  use tauri_plugin_shell::process::CommandEvent;
+  while let Some(event) = rx.recv().await {
+    match event {
+      CommandEvent::Stdout(data) => stdout_buf.extend(data),
+      CommandEvent::Stderr(data) => stderr_buf.extend(data),
+      CommandEvent::Error(msg) => stderr_buf.extend(msg.as_bytes()),
+      CommandEvent::Terminated(status) => {
+         // 进程结束，清理句柄
+         let mut guard = state.0.lock().unwrap(); // 这里 unwrap 安全，因为我们持有 state
+         *guard = None;
+
+         if !status.code.unwrap_or(0) == 0 {
+             return Err(ApiError::new(
+               "SIDE_CAR_NON_ZERO",
+               String::from_utf8_lossy(&stderr_buf).to_string(),
+             ));
+         }
+      }
+      _ => {}
+    }
+  }
+
+  // 5. 解析结果
+  let stdout = String::from_utf8(stdout_buf).map_err(|e| ApiError::new("UTF8", e.to_string()))?;
   let v: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| ApiError::new("JSON", e.to_string()))?;
   Ok(LoadLibraryResponse {
     collections: v.get("collections").cloned().unwrap_or(serde_json::json!([])),
@@ -1682,6 +1724,7 @@ async fn save_fields(next: serde_json::Value) -> Result<(), ApiError> {
 fn main() {
   tauri::Builder::default()
     .manage(ZoteroWatchState(Mutex::new(None)))
+    .manage(LoadLibraryState(Mutex::new(None)))
     .manage(AnalysisState {
       child: Mutex::new(None),
       pid: Mutex::new(None),
@@ -1710,8 +1753,6 @@ fn main() {
       purge_item_field,
       update_item,
       read_config,
-      save_config,
-      read_fields,
       save_config,
       read_fields,
       save_fields

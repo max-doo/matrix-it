@@ -52,6 +52,7 @@ type WorkbenchToolbarProps = {
   metaFieldDefs: Record<string, unknown>
   analysisFieldDefs: Record<string, unknown>
   matrixAnalysisSettingsOrder: string[]
+  defaultMetaOrder: string[]
   getFieldName: (defs: Record<string, unknown>, key: string) => string
   applyMetaPanelChange: (nextKeys: string[], nextHidden: Set<string>) => Promise<void>
   applyAnalysisPanelChange: (nextKeys: string[], nextHidden: Set<string>) => Promise<void>
@@ -108,6 +109,7 @@ export function WorkbenchToolbar({
   metaFieldDefs,
   analysisFieldDefs,
   matrixAnalysisSettingsOrder,
+  defaultMetaOrder,
   getFieldName,
   applyMetaPanelChange,
   applyAnalysisPanelChange,
@@ -254,6 +256,7 @@ export function WorkbenchToolbar({
           metaFieldDefs={metaFieldDefs}
           analysisFieldDefs={analysisFieldDefs}
           matrixAnalysisSettingsOrder={matrixAnalysisSettingsOrder}
+          defaultMetaOrder={defaultMetaOrder}
           getFieldName={getFieldName}
           applyMetaPanelChange={applyMetaPanelChange}
           applyAnalysisPanelChange={applyAnalysisPanelChange}
@@ -297,12 +300,12 @@ export function WorkbenchToolbar({
             analysisInProgress
               ? onStopRequest
               : () => {
-                  if (!llmConfigured) {
-                    message.warning('模型 API 未配置完成，请到设置页填写 API Key / Base URL / Model')
-                    return
-                  }
-                  onAnalyzeRequest()
+                if (!llmConfigured) {
+                  message.warning('模型 API 未配置完成，请到设置页填写 API Key / Base URL / Model')
+                  return
                 }
+                onAnalyzeRequest()
+              }
           }
           disabled={analysisInProgress ? stoppingAnalysis : selectedCount === 0}
         >

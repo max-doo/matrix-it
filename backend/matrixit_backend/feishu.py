@@ -50,8 +50,8 @@ TYPE_MAPPING = {
     "file": FIELD_TYPE_ATTACHMENT,
 }
 
-FEISHU_META_DEFAULT_ORDER = ["title", "author", "year", "type", "publications", "impact_factor", "journal_tags", "abstract", "tags", "collections", "url", "doi"]
-FEISHU_META_FIXED_KEYS = {"title", "author", "year", "publications"}
+
+FEISHU_META_FIXED_KEYS = {"title", "author", "year", "publications", "rating", "progress"}
 
 LITERATURE_TYPE_LABELS_ZH: Dict[str, str] = {
     "journalArticle": "期刊文章",
@@ -617,7 +617,12 @@ def upload_items(
     if isinstance(meta_sync_raw, list):
         enabled_meta = set([str(x).strip() for x in meta_sync_raw if str(x).strip()])
     else:
-        enabled_meta = set([k for k in FEISHU_META_DEFAULT_ORDER if k != "doi"])
+        # Fallback to defaults from fields definitions if config is missing
+        default_order = fields_def.get("meta_order", [])
+        if not default_order:
+             # Very minimal fallback if even meta_order is missing
+             default_order = ["title", "author", "year", "type", "publications", "rating", "progress", "impact_factor", "journal_tags", "tags", "collections", "url", "doi"]
+        enabled_meta = set([k for k in default_order if k != "doi"])
 
     def _should_sync_meta_key(k: str) -> bool:
         if k in FEISHU_META_FIXED_KEYS:
@@ -659,7 +664,11 @@ def upload_items(
         if s in ("0", "false", "no", "n", "off"):
             attachment_enabled = False
 
-    meta_keys_ordered = _unique_keep_order(FEISHU_META_DEFAULT_ORDER + list(meta_defs.keys()))
+    default_order = fields_def.get("meta_order", [])
+    if not default_order:
+        default_order = ["title", "author", "year", "type", "publications", "rating", "progress", "impact_factor", "journal_tags", "tags", "collections", "url", "citation", "doi", "abstract"]
+    
+    meta_keys_ordered = _unique_keep_order(default_order + list(meta_defs.keys()))
     for k in meta_keys_ordered:
         if k not in meta_defs:
             continue

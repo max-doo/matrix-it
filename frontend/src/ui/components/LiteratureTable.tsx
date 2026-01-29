@@ -5,12 +5,19 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react'
 import type { BadgeProps } from 'antd'
-import { Badge, Tag, Typography } from 'antd'
+import { Badge, Dropdown, Tag, Typography } from 'antd'
 import type { ProColumns } from '@ant-design/pro-components'
 import { ProTable } from '@ant-design/pro-components'
 
 import type { LiteratureItem, ProcessingStatus } from '../../types'
 import { formatAuthor, formatIF, getJournalTags, getLiteratureTypeMeta } from '../utils/ui-formatters'
+import {
+  RATING_OPTIONS,
+  RATING_EMOJI_MAP,
+  PROGRESS_OPTIONS,
+  PROGRESS_EMOJI_MAP
+} from '../utils/constants'
+import { updateItem } from '../../lib/backend'
 
 export type LiteratureTableView = 'zotero' | 'matrix'
 
@@ -26,6 +33,8 @@ export type LiteratureTableProps = {
   onSelectedRowKeysChange: (keys: React.Key[]) => void
   onOpenDetail: (itemKey: string) => void
   onRefresh: () => void
+  /** 乐观更新回调，用于局部更新 item 字段避免全库刷新 */
+  onItemPatch?: (itemKey: string, patch: Record<string, unknown>) => void
   onPageRowsChange?: (rows: LiteratureItem[]) => void
   /** 排序后的完整数据，用于抽屉切换条目时按视图顺序导航 */
   onSortedDataChange?: (rows: LiteratureItem[]) => void
@@ -52,6 +61,8 @@ const COLUMN_MIN_WIDTHS: Record<string, number> = {
   impact_factor: 60,
   journal_tags: 240,
   [STATUS_KEY]: 120,
+  rating: 80,
+  progress: 80,
 }
 
 const COLUMN_MAX_WIDTHS: Record<string, number> = {
@@ -186,12 +197,13 @@ export function LiteratureTable({
   onSelectedRowKeysChange,
   onOpenDetail,
   onRefresh,
+  onItemPatch,
   onPageRowsChange,
   onSortedDataChange,
   activeItemKey,
 }: LiteratureTableProps) {
   const showStatus = true
-  const fixedWidthCols = useMemo(() => new Set(['author', 'year', 'type', 'bib_type', 'impact_factor']), [])
+  const fixedWidthCols = useMemo(() => new Set(['author', 'year', 'type', 'bib_type', 'impact_factor', 'rating', 'progress']), [])
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const highlightTokens = useMemo(() => {
@@ -352,6 +364,38 @@ export function LiteratureTable({
       if (itemKey) onOpenDetail(itemKey)
     },
     [onOpenDetail]
+  )
+
+  /**
+   * 乐观更新处理器：Rating 评分
+   * 使用 useCallback 避免每行创建匿名函数，符合前端规范
+   */
+  const handleRatingChange = useCallback(
+    (itemKey: string, newVal: string) => {
+      const patch = { rating: newVal || null }
+      if (onItemPatch) {
+        onItemPatch(itemKey, patch)
+      } else {
+        updateItem(itemKey, patch).then(() => onRefresh())
+      }
+    },
+    [onItemPatch, onRefresh]
+  )
+
+  /**
+   * 乐观更新处理器：Progress 进度
+   * 使用 useCallback 避免每行创建匿名函数，符合前端规范
+   */
+  const handleProgressChange = useCallback(
+    (itemKey: string, newVal: string) => {
+      const patch = { progress: newVal }
+      if (onItemPatch) {
+        onItemPatch(itemKey, patch)
+      } else {
+        updateItem(itemKey, patch).then(() => onRefresh())
+      }
+    },
+    [onItemPatch, onRefresh]
   )
 
   const visibleKeys = useMemo(() => {
@@ -745,6 +789,20 @@ export function LiteratureTable({
               return getIF(a) - getIF(b)
             }
 
+            // 特殊处理：Rating 评分（数值映射排序）
+            if (colKey === 'rating') {
+              const ratingScore: Record<string, number> = { High: 3, Medium: 2, Low: 1 }
+              const getScore = (val: unknown) => ratingScore[String(val || '')] || 0
+              return getScore(a) - getScore(b)
+            }
+
+            // 特殊处理：Progress 进度（状态顺序排序）
+            if (colKey === 'progress') {
+              const progressScore: Record<string, number> = { Finished: 3, Reading: 2, Unread: 1 }
+              const getScore = (val: unknown) => progressScore[String(val || 'Unread')] || 0
+              return getScore(a) - getScore(b)
+            }
+
             // 特殊处理：期刊标签（按分区权重排序 Q1 > Q2...）
             if (colKey === 'journal_tags') {
               const getScore = (rec: unknown) => {
@@ -851,6 +909,66 @@ export function LiteratureTable({
               return <span className="secondary-color">-</span>
             }
 
+
+            // 特殊处理：Rating 评分（Emoji 风格）
+            if (colKey === 'rating') {
+              const currentVal = String(v ?? '')
+              const emoji = RATING_EMOJI_MAP[currentVal]
+
+              if (!emoji) {
+                return (
+                  <Dropdown
+                    menu={{
+                      items: RATING_OPTIONS,
+                      onClick: ({ key }) => handleRatingChange(record.item_key, key),
+                    }}
+                    trigger={['click']}
+                  >
+                    <Tag className="cursor-pointer hover:opacity-80 m-0 select-none">未评分</Tag>
+                  </Dropdown>
+                )
+              }
+
+              return (
+                <Dropdown
+                  menu={{
+                    items: RATING_OPTIONS,
+                    onClick: ({ key }) => handleRatingChange(record.item_key, key),
+                  }}
+                  trigger={['click']}
+                >
+                  <span
+                    className="cursor-pointer hover:opacity-80 select-none text-xl flex items-center justify-center w-full"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {emoji}
+                  </span>
+                </Dropdown>
+              )
+            }
+
+            // 特殊处理：Progress 进度 (Emoji 风格)
+            if (colKey === 'progress') {
+              const currentVal = String(v ?? 'Unread')
+              const emoji = PROGRESS_EMOJI_MAP[currentVal] || PROGRESS_EMOJI_MAP['Unread']
+              return (
+                <Dropdown
+                  menu={{
+                    items: PROGRESS_OPTIONS,
+                    onClick: ({ key }) => handleProgressChange(record.item_key, key),
+                  }}
+                  trigger={['click']}
+                >
+                  <span
+                    className="cursor-pointer hover:opacity-80 select-none text-xl flex items-center justify-center w-full"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {emoji}
+                  </span>
+                </Dropdown>
+              )
+            }
+
             if (v === null || v === undefined || v === '') {
               return <span className="secondary-color">-</span>
             }
@@ -936,7 +1054,7 @@ export function LiteratureTable({
 
       return [titleCol, ...metaCols, ...analysisCols, ...(statusCol ? [statusCol] : [])]
     },
-    [fixedWidthCols, getColCssVar, handleTitleClick, showStatus, sortState.key, sortState.order, startResize, titleOption?.label, view, visibleAnalysis, visibleMeta]
+    [fixedWidthCols, getColCssVar, handleProgressChange, handleRatingChange, handleTitleClick, showStatus, sortState.key, sortState.order, startResize, titleOption?.label, view, visibleAnalysis, visibleMeta]
   )
 
   return (

@@ -4,11 +4,17 @@
  *           支持在 Matrix 视图下编辑分析字段，并提供上下篇切换导航。
  */
 import { CloseOutlined, LeftOutlined, ReadOutlined, RightOutlined } from '@ant-design/icons'
-import { App, Button, Descriptions, Drawer, Space, Tag, Typography, Input, Tooltip } from 'antd'
+import { App, Button, Descriptions, Drawer, Space, Tag, Typography, Input, Tooltip, Dropdown } from 'antd'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { openExternal, openPath, openPdfInBrowser, resolvePdfPath } from '../../lib/backend'
 import type { LiteratureItem } from '../../types'
-import { formatAuthor, getLiteratureTypeMeta } from '../utils/ui-formatters'
+import { formatAuthor, formatIF, getJournalTags, getLiteratureTypeMeta } from '../utils/ui-formatters'
+import {
+  RATING_OPTIONS,
+  RATING_EMOJI_MAP,
+  PROGRESS_OPTIONS,
+  PROGRESS_EMOJI_MAP
+} from '../utils/constants'
 
 export type LiteratureDetailDrawerMode = 'zotero' | 'matrix'
 
@@ -22,6 +28,8 @@ export type LiteratureDetailDrawerProps = {
   onClose: () => void
   onLeaveGuardChange?: (guard: (() => Promise<boolean>) | null) => void
   onSave?: (key: string, patch: Record<string, unknown>) => Promise<void>
+  /** 乐观更新回调，用于局部更新 item 字段 */
+  onItemPatch?: (itemKey: string, patch: Record<string, unknown>) => void
   citationState?: { loading: boolean; error?: string | null }
   onPrev?: () => void
   onNext?: () => void
@@ -44,6 +52,7 @@ export function LiteratureDetailDrawer({
   onClose,
   onLeaveGuardChange,
   onSave,
+  onItemPatch,
   citationState,
   onPrev,
   onNext,
@@ -508,6 +517,111 @@ export function LiteratureDetailDrawer({
                     <span>{toText(item.year) || '（未知年份）'}</span>
                     <span className="text-slate-400">·</span>
                     <span>{toText((item as Record<string, unknown>).publications) || '（未知出版物）'}</span>
+                    {(() => {
+                      const metaExtra = (item as Record<string, unknown>).meta_extra as Record<string, unknown> | undefined
+                      const jcrData = metaExtra && typeof metaExtra === 'object' ? (metaExtra as Record<string, unknown>).jcr : null
+                      const ifValue = jcrData && typeof jcrData === 'object' ? (jcrData as Record<string, unknown>).impact_factor : null
+                      if (ifValue !== null && ifValue !== undefined) {
+                        const formatted = formatIF(ifValue)
+                        return (
+                          <>
+                            <span className="text-slate-400">·</span>
+                            <span style={{ color: formatted.color, fontWeight: 600 }}>{formatted.text}</span>
+                          </>
+                        )
+                      }
+                      return null
+                    })()}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Rating Dropdown */}
+                    {(() => {
+                      const v = item.rating
+                      const currentVal = String(v ?? '')
+                      const emoji = RATING_EMOJI_MAP[currentVal]
+
+                      const handleChange = (key: string) => {
+                        if (onItemPatch && item.item_key) {
+                          onItemPatch(item.item_key, { rating: key || null })
+                        }
+                      }
+
+                      if (!emoji) {
+                        return (
+                          <Dropdown
+                            menu={{
+                              items: RATING_OPTIONS,
+                              onClick: ({ key }) => handleChange(key),
+                              disabled: !onItemPatch
+                            }}
+                            trigger={['click']}
+                          >
+                            <Tag className="cursor-pointer hover:opacity-80 m-0 select-none">未评分</Tag>
+                          </Dropdown>
+                        )
+                      }
+                      return (
+                        <Dropdown
+                          menu={{
+                            items: RATING_OPTIONS,
+                            onClick: ({ key }) => handleChange(key),
+                            disabled: !onItemPatch
+                          }}
+                          trigger={['click']}
+                        >
+                          <span
+                            className="cursor-pointer hover:opacity-80 select-none text-xl inline-flex items-center"
+                          >
+                            {emoji}
+                          </span>
+                        </Dropdown>
+                      )
+                    })()}
+
+                    {/* Progress Dropdown */}
+                    {(() => {
+                      const v = item.progress
+                      const currentVal = String(v ?? 'Unread')
+                      const emoji = PROGRESS_EMOJI_MAP[currentVal] || PROGRESS_EMOJI_MAP['Unread']
+
+                      const handleChange = (key: string) => {
+                        if (onItemPatch && item.item_key) {
+                          onItemPatch(item.item_key, { progress: key })
+                        }
+                      }
+
+                      return (
+                        <Dropdown
+                          menu={{
+                            items: PROGRESS_OPTIONS,
+                            onClick: ({ key }) => handleChange(key),
+                            disabled: !onItemPatch
+                          }}
+                          trigger={['click']}
+                        >
+                          <span
+                            className="cursor-pointer hover:opacity-80 select-none text-xl inline-flex items-center"
+                          >
+                            {emoji}
+                          </span>
+                        </Dropdown>
+                      )
+                    })()}
+
+                    {/* Journal Tags */}
+                    {(() => {
+                      const journalTags = getJournalTags(item as any)
+                      if (journalTags.length > 0) {
+                        return (
+                          <>
+                            {journalTags.map((tag, idx) => (
+                              <Tag key={`${tag.type}-${idx}`} color={tag.color} bordered={false} className="m-0">{tag.label}</Tag>
+                            ))}
+                          </>
+                        )
+                      }
+                      return null
+                    })()}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-medium text-slate-600">文献类型</span>
@@ -646,6 +760,107 @@ export function LiteratureDetailDrawer({
                     })()}
                   </Descriptions.Item>
                   <Descriptions.Item label="出版物">{toText((item as Record<string, unknown>).publications)}</Descriptions.Item>
+                  <Descriptions.Item label="影响因子">
+                    {(() => {
+                      const metaExtra = (item as Record<string, unknown>).meta_extra as Record<string, unknown> | undefined
+                      const jcrData = metaExtra && typeof metaExtra === 'object' ? (metaExtra as Record<string, unknown>).jcr : null
+                      const ifValue = jcrData && typeof jcrData === 'object' ? (jcrData as Record<string, unknown>).impact_factor : null
+                      if (ifValue !== null && ifValue !== undefined) {
+                        const formatted = formatIF(ifValue)
+                        return <span style={{ color: formatted.color, fontWeight: 600 }}>{formatted.text}</span>
+                      }
+                      return <span className="secondary-color">-</span>
+                    })()}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="期刊标签">
+                    {(() => {
+                      const journalTags = getJournalTags(item as any)
+                      if (journalTags.length > 0) {
+                        return (
+                          <div className="flex flex-wrap gap-1">
+                            {journalTags.map((tag, idx) => (
+                              <Tag key={`${tag.type}-${idx}`} color={tag.color} bordered={false} className="m-0">{tag.label}</Tag>
+                            ))}
+                          </div>
+                        )
+                      }
+                      return <span className="secondary-color">-</span>
+                    })()}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="评分">
+                    {(() => {
+                      const v = item.rating
+                      const currentVal = String(v ?? '')
+                      const emoji = RATING_EMOJI_MAP[currentVal]
+
+                      const handleChange = (key: string) => {
+                        if (onItemPatch && item.item_key) {
+                          onItemPatch(item.item_key, { rating: key || null })
+                        }
+                      }
+
+                      if (!emoji) {
+                        return (
+                          <Dropdown
+                            menu={{
+                              items: RATING_OPTIONS,
+                              onClick: ({ key }) => handleChange(key),
+                              disabled: !onItemPatch
+                            }}
+                            trigger={['click']}
+                          >
+                            <Tag className="cursor-pointer hover:opacity-80 m-0 select-none">未评分</Tag>
+                          </Dropdown>
+                        )
+                      }
+                      return (
+                        <Dropdown
+                          menu={{
+                            items: RATING_OPTIONS,
+                            onClick: ({ key }) => handleChange(key),
+                            disabled: !onItemPatch
+                          }}
+                          trigger={['click']}
+                        >
+                          <span
+                            className="cursor-pointer hover:opacity-80 select-none text-xl inline-flex items-center"
+                          >
+                            {emoji}
+                          </span>
+                        </Dropdown>
+                      )
+                    })()}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="进度">
+                    {(() => {
+                      const v = item.progress
+                      const currentVal = String(v ?? 'Unread')
+                      const emoji = PROGRESS_EMOJI_MAP[currentVal] || PROGRESS_EMOJI_MAP['Unread']
+
+                      const handleChange = (key: string) => {
+                        if (onItemPatch && item.item_key) {
+                          onItemPatch(item.item_key, { progress: key })
+                        }
+                      }
+
+                      return (
+                        <Dropdown
+                          menu={{
+                            items: PROGRESS_OPTIONS,
+                            onClick: ({ key }) => handleChange(key),
+                            disabled: !onItemPatch
+                          }}
+                          trigger={['click']}
+                        >
+                          <span
+                            className="cursor-pointer hover:opacity-80 select-none text-xl inline-flex items-center"
+                          >
+                            {emoji}
+                          </span>
+                        </Dropdown>
+                      )
+                    })()}
+                  </Descriptions.Item>
                   <Descriptions.Item label="摘要">
                     {abstract ? <div className="break-words whitespace-pre-wrap [overflow-wrap:anywhere]">{abstract}</div> : <span className="secondary-color">-</span>}
                   </Descriptions.Item>

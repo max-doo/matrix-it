@@ -526,12 +526,20 @@ def load_library(literature_json: str, db_path: str, root_dir: str, config_path:
         key = str(it.get("item_key"))
         existing = existing_idx.get(key, {})
         base = existing.copy()
+        # 保留本地管理字段（这些字段不来自 Zotero，由 MatrixIt 管理）
         old_citation = existing.get("citation")
+        old_rating = existing.get("rating")
+        old_progress = existing.get("progress")
         base.update(it)
+        # 恢复本地管理字段
         if isinstance(old_citation, str):
             base["citation"] = old_citation
         else:
             base["citation"] = ""
+        if old_rating is not None:
+            base["rating"] = old_rating
+        if old_progress is not None:
+            base["progress"] = old_progress
         base.setdefault("processed_status", "unprocessed")
         base.setdefault("sync_status", "unsynced")
         if base.get("processed") is True and base.get("sync_status") == "unsynced":
