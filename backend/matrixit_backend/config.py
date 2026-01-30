@@ -21,6 +21,19 @@ def load_json(path: str, default: Any) -> Any:
     Returns:
         解析后的 JSON 对象或默认值
     """
+
+
+def load_json(path: str, default: Any) -> Any:
+    """
+    读取 JSON 文件内容。
+    
+    Args:
+        path: 文件路径
+        default: 文件不存在时返回的默认值
+        
+    Returns:
+        解析后的 JSON 对象或默认值
+    """
     if not os.path.exists(path):
         return default
     with open(path, "r", encoding="utf-8") as f:
@@ -34,6 +47,10 @@ def load_config(config_path: str) -> Dict[str, Any]:
     读取指定的主配置文件 (config.json)，并检查同目录下是否存在 config.local.json。
     若存在，则将 local 配置合并到主配置中。
     
+    路径解析优先级：
+    1. 指定的 config_path（绝对或相对路径）
+    2. sidecar 同级 resources/config.json（打包后路径）
+    
     合并策略：
     - 顶层键值对直接覆盖
     - 若值为字典，则进行 update 操作（浅层合并）
@@ -45,11 +62,23 @@ def load_config(config_path: str) -> Dict[str, Any]:
         Dict[str, Any]: 合并后的配置字典
     """
     config: Dict[str, Any] = {}
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
+    
+    # 尝试加载主配置文件
+    effective_path = config_path
+    if not os.path.exists(config_path):
+        # 打包后路径：sidecar 同级 resources/config.default.json
+        import sys
+        from pathlib import Path
+        if getattr(sys, 'frozen', False):
+            bundled_path = Path(sys.executable).parent / "resources" / "config.default.json"
+            if bundled_path.exists():
+                effective_path = str(bundled_path)
+    
+    if os.path.exists(effective_path):
+        with open(effective_path, "r", encoding="utf-8") as f:
             config = json.load(f)
 
-    base_dir = os.path.dirname(os.path.abspath(config_path))
+    base_dir = os.path.dirname(os.path.abspath(effective_path))
     local_path = os.path.join(base_dir, "config.local.json")
     if os.path.exists(local_path):
         with open(local_path, "r", encoding="utf-8") as f:

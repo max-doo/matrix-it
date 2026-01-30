@@ -1,0 +1,284 @@
+{
+    "feishu": {
+        "app_id": "",
+        "app_secret": "",
+        "attachment_sync": false,
+        "bitable_url": "",
+        "meta_sync": [
+            "type",
+            "impact_factor",
+            "journal_tags",
+            "abstract",
+            "tags",
+            "collections",
+            "url"
+        ]
+    },
+    "fields": {
+        "analysis_fields": {
+            "bib_type": {
+                "description": "基于全文特征，从以下列表中严格选择**最匹配的一项**：[实证研究 / 综述论文 / 理论构建 / 方法论论文 / 案例研究 / 技术报告 / 行业白皮书]。如果都不符合可创造新分类。",
+                "name": "文献类型",
+                "rule": "A",
+                "type": "select"
+            },
+            "contribution": {
+                "description": "可以分两方面总结：\n• 理论贡献：对现有知识体系的修正或补充；\n• 实践/应用贡献：对实际工程或行业的具体指导意义。",
+                "name": "贡献",
+                "rule": "A",
+                "type": "string"
+            },
+            "highlights": {
+                "description": "（专家视角）挖掘论文的'高光时刻'：\n• 选题是否新颖？\n• 方法是否有独创性改进？\n• 视角是否独特？\n请分点列出具体的创新细节。",
+                "name": "亮点",
+                "rule": "B",
+                "type": "string"
+            },
+            "inspiration": {
+                "description": "1.作者建议的研究方向；\n2.以专家视角分析这篇文章在理论、方法、选题等方面可能带来的具体启发，设想未来针对该领域可能的研究方向。",
+                "name": "启发",
+                "rule": "B",
+                "type": "string"
+            },
+            "key_findings": {
+                "description": "列出3-5个最重要的结论。要求：\n• 必须包含具体的量化数据（如有），如'准确率提升5%'而非'准确率有所提升'；\n• 区分主要发现与次要发现；\n• 必须分点陈述。",
+                "name": "关键发现",
+                "rule": "A",
+                "type": "string"
+            },
+            "key_word": {
+                "description": "提取核心关键词，示例：关键词1，关键词2，关键词3。要求：1. 英文文献必须翻译为标准的中文专业术语；2. 仅保留通用缩写（如LLM, DNA），否则全称译出；3. 输出为逗号分隔的字符串。",
+                "name": "关键词",
+                "rule": "A",
+                "type": "multi_select"
+            },
+            "limitations": {
+                "description": "必须分两类严格分点：\n1. 【作者自陈】：原文Discussion中承认的不足；\n2. 【专家批判】：作者未提及底部局限，从以下5个维度挖掘原文未提及的硬伤：\n1. 方法论缺陷：样本代表性、控制变量缺失、基准测试不公或实验设计的系统性偏差；\n2. 逻辑漏洞：是否存在循环论证、过度泛化（Over-generalization）或逻辑跳跃；\n3. 理论局限：理论是否过时、应用是否牵强或忽视了竞争性理论；\n4. 证据薄弱：数据可靠性存疑、单一证据来源或图表误导；\n5. 创新不足：是否'旧瓶装新酒'或夸大贡献。\n\n注意：输出必须犀利、具体，拒绝客套。",
+                "name": "局限",
+                "rule": "B",
+                "type": "string"
+            },
+            "logic": {
+                "description": "复盘作者的推导链条：\n• 起点：从什么现象/理论出发？\n• 过程：如何通过证据A导出结论B？\n• 终点：最终如何回归到核心论点？请分步骤简述其推理路径。",
+                "name": "论证逻辑",
+                "rule": "A",
+                "type": "string"
+            },
+            "methods": {
+                "description": "按以下维度分点描述（如某维度缺失则跳过）：\n• 研究设计：如实验、准实验、纵向研究等；\n• 对象/数据：样本量、数据来源、筛选标准；\n• 工具/模型：使用的核心算法、分析方法、量表或设备；\n• 过程：关键的处理或干预步骤。",
+                "name": "研究方法",
+                "rule": "A",
+                "type": "string"
+            },
+            "research_question": {
+                "description": "分点概括：\n• 核心目标：本文试图解决的具体痛点或填补的空白。\n• 假设/问题：具体的研究假设（Hypothesis）或探究的具体问题（RQ）。",
+                "name": "研究问题",
+                "rule": "A",
+                "type": "string"
+            },
+            "tldr": {
+                "description": "用一段话极度精炼地概括本文的'背景-问题-方法-结果-结论'。要求逻辑连贯，字数控制在100-200字之间，**不做分点**，但需包含核心信息密度。",
+                "name": "TLDR",
+                "rule": "A",
+                "type": "string"
+            }
+        },
+        "attachment_fields": {
+            "attachment": {
+                "description": "pdf文件",
+                "name": "附件",
+                "type": "file"
+            }
+        },
+        "meta_fields": {
+            "abstract": {
+                "name": "摘要",
+                "type": "string"
+            },
+            "author": {
+                "name": "作者",
+                "type": "string"
+            },
+            "citation": {
+                "name": "引用格式",
+                "type": "string"
+            },
+            "collections": {
+                "name": "集合",
+                "type": "multi_select"
+            },
+            "doi": {
+                "name": "DOI",
+                "type": "string"
+            },
+            "impact_factor": {
+                "name": "IF",
+                "type": "number"
+            },
+            "journal_tags": {
+                "name": "期刊标签",
+                "type": "multi_select"
+            },
+            "progress": {
+                "name": "进度",
+                "type": "select"
+            },
+            "publications": {
+                "name": "出版物",
+                "type": "string"
+            },
+            "rating": {
+                "name": "评分",
+                "type": "select"
+            },
+            "tags": {
+                "name": "标签",
+                "type": "multi_select"
+            },
+            "title": {
+                "name": "标题",
+                "type": "string"
+            },
+            "type": {
+                "name": "类型",
+                "type": "select"
+            },
+            "url": {
+                "name": "URL",
+                "type": "string"
+            },
+            "year": {
+                "name": "年份",
+                "type": "number"
+            }
+        },
+        "meta_order": [
+            "title",
+            "author",
+            "year",
+            "type",
+            "publications",
+            "rating",
+            "progress",
+            "impact_factor",
+            "journal_tags",
+            "tags",
+            "collections",
+            "url",
+            "citation",
+            "doi",
+            "abstract"
+        ]
+    },
+    "llm": {
+        "api_key": "",
+        "base_url": "",
+        "max_input_chars": 500000,
+        "max_pdf_bytes": 20971520,
+        "model": [],
+        "multimodal": false,
+        "parallel_count": 3,
+        "profiles": {
+            "custom": {
+                "base_url": ""
+            },
+            "dashscope": {
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            },
+            "deepseek": {
+                "base_url": "https://api.deepseek.com"
+            },
+            "doubao": {
+                "base_url": "https://ark.cn-beijing.volces.com/api/v3"
+            },
+            "gemini": {
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/"
+            },
+            "moonshot": {
+                "base_url": "https://api.moonshot.cn/v1"
+            },
+            "openai": {
+                "base_url": "https://api.openai.com/v1"
+            },
+            "openrouter": {
+                "base_url": "https://openrouter.ai/api/v1"
+            },
+            "siliconflow": {
+                "base_url": "https://api.siliconflow.cn/v1"
+            },
+            "zhipu": {
+                "base_url": "https://open.bigmodel.cn/api/paas/v4"
+            }
+        },
+        "provider": "custom",
+        "temperature": 0.5
+    },
+    "ui": {
+        "debug_llm": false,
+        "pdf_open_mode": "local",
+        "table_columns": {
+            "matrix": {
+                "analysis": {
+                    "order": [
+                        "tldr",
+                        "key_word",
+                        "bib_type",
+                        "research_question",
+                        "methods",
+                        "logic",
+                        "key_findings",
+                        "contribution",
+                        "highlights",
+                        "limitations",
+                        "inspiration"
+                    ],
+                    "visible": [
+                        "tldr",
+                        "key_word",
+                        "bib_type",
+                        "research_question",
+                        "methods",
+                        "logic",
+                        "key_findings",
+                        "contribution",
+                        "highlights",
+                        "limitations",
+                        "inspiration"
+                    ]
+                },
+                "meta": {
+                    "visible": [
+                        "title",
+                        "author",
+                        "year",
+                        "type",
+                        "publications",
+                        "rating",
+                        "progress",
+                        "impact_factor",
+                        "journal_tags"
+                    ]
+                }
+            },
+            "zotero": {
+                "meta": {
+                    "visible": [
+                        "title",
+                        "author",
+                        "year",
+                        "type",
+                        "publications",
+                        "rating",
+                        "progress",
+                        "impact_factor",
+                        "journal_tags",
+                        "tags"
+                    ]
+                }
+            }
+        }
+    },
+    "zotero": {
+        "data_dir": ""
+    }
+}

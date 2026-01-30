@@ -108,11 +108,7 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
         api_key: currentValues.api_key,
         base_url: currentValues.base_url,
         model: currentValues.model,
-        temperature: currentValues.temperature,
-        max_input_chars: currentValues.max_input_chars,
-        max_pdf_bytes: currentValues.max_pdf_bytes,
-        multimodal: currentValues.multimodal,
-        parallel_count: currentValues.parallel_count,
+        // 注意：temperature 不保存到 profile，作为全局统一设置
       }
     }
 
@@ -121,8 +117,8 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
     let nextValues: Record<string, any> = {}
 
     if (targetProfile) {
-      // 有存档，直接加载
-      const { parallel_count_max: _pMax, multimodal_parallel_count_max: _mMax, ...rest } = targetProfile as Record<string, any>
+      // 有存档，加载 provider 特定配置（不包含 temperature）
+      const { parallel_count_max: _pMax, multimodal_parallel_count_max: _mMax, temperature: _temp, ...rest } = targetProfile as Record<string, any>
       nextValues = { ...rest }
       // 修正：如果存档中 Base URL 为空且非 Custom，则填充默认 URL
       if (!nextValues.base_url && newProvider !== 'custom') {
@@ -132,18 +128,12 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
         }
       }
     } else {
-      // 无存档，加载默认值
+      // 无存档，加载默认值（不设置 temperature，保持当前全局值）
       const pData = PROVIDERS.find(x => x.value === newProvider)
       nextValues = {
         api_key: '', // 切换到新服务商默认为空
         base_url: pData?.baseUrl || '',
         model: [],
-        // 保持一些通用设置的默认值
-        temperature: 0.5,
-        max_input_chars: 500000,
-        max_pdf_bytes: 20 * 1024 * 1024,
-        multimodal: false,
-        parallel_count: 3,
       }
     }
 
@@ -648,12 +638,15 @@ export function SettingsPage({
                         const currentLlmRaw = (configForm.getFieldValue('llm') || {}) as Record<string, unknown>
                         const { parallel_count_max: _pMax, multimodal_parallel_count_max: _mMax, ...currentLlm } = currentLlmRaw as Record<string, any>
                         const pData = PROVIDERS.find(x => x.value === currentLlm.provider);
-                        const defaultBaseUrl = pData?.baseUrl || '';
+                        // custom provider 保留用户的 base_url，其他 provider 还原为预设值
+                        const defaultBaseUrl = currentLlm.provider === 'custom'
+                          ? currentLlm.base_url
+                          : (pData?.baseUrl || '');
 
                         configForm.setFieldsValue({
                           llm: {
                             ...currentLlm,
-                            base_url: defaultBaseUrl, // 还原 Base URL
+                            base_url: defaultBaseUrl, // custom 保留，其他还原
                             temperature: 0.5,
                             max_input_chars: 500000,
                             max_pdf_bytes: 20 * 1024 * 1024,

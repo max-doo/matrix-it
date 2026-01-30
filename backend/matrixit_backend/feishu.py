@@ -32,6 +32,8 @@ from lark_oapi.api.bitable.v1 import (
     UpdateAppTableRecordRequest,
 )
 from lark_oapi.api.drive.v1 import UploadAllMediaRequest, UploadAllMediaRequestBody
+from lark_oapi.api.wiki.v2 import GetNodeSpaceRequest
+
 
 from matrixit_backend import zotero
 from matrixit_backend.config import save_local_config_patch
@@ -84,37 +86,92 @@ def map_literature_type_to_zh(value: object) -> object:
 def parse_bitable_url(url: str) -> Tuple[Optional[str], Optional[str]]:
     """
     从飞书多维表链接中解析 app_token 与 table_id。
+    支持 /base/ 和 /wiki/ 两种格式。
     
     Args:
         url: 飞书多维表的完整 URL
         
     Returns:
-        Tuple[app_token, table_id]: 解析失败则返回 (None, None)
-        
-    Examples:
-        - Path: .../base/<app_token>/<table_id>...
-        - Query: ...?table=<table_id>
+        Tuple[token, table_id]: 
+            - 若为 base URL，返回 (app_token, table_id)
+            - 若为 wiki URL，返回 (wiki_token, table_id) 用于后续解析
+            - 解析失败返回 (None, None)
     """
     if not url:
         return None, None
     try:
         parsed = urlparse(url)
-        path_parts = parsed.path.strip("/").split("/")
-        app_token, table_id = None, None
+        path = parsed.path.strip("/")
+        path_parts = path.split("/")
+        token, table_id = None, None
 
+        # Case 1: /base/<app_token>
         if len(path_parts) >= 2 and path_parts[0] == "base":
-            app_token = path_parts[1]
+            token = path_parts[1]
             if len(path_parts) >= 3 and path_parts[2].startswith("tbl"):
                 table_id = path_parts[2]
 
+        # Case 2: /wiki/<wiki_token>
+        elif len(path_parts) >= 2 and path_parts[0] == "wiki":
+            token = path_parts[1]
+            # Wiki URLs usually don't have table_id in path, but check query
+            
         if not table_id:
             qs = parse_qs(parsed.query)
             if "table" in qs:
                 table_id = qs["table"][0]
 
-        return app_token, table_id
+        return token, table_id
     except Exception:
         return None, None
+
+def resolve_wiki_token(client: lark.Client, token: str) -> Optional[str]:
+    """
+    尝试将 Wiki Token 解析为真实的 Bitable App Token。
+    
+    Args:
+        client: 飞书客户端
+        token: 可能是 Wiki Token 或 App Token
+        
+    Returns:
+        解析出的 App Token，如果解析失败或非 Wiki Token 则尝试原样返回或返回 None
+    """
+    if not token:
+        return None
+        
+    # 尝试调用 Wiki 获取节点信息接口
+    # Wiki Token 通常较长，App Token 通常以 base_ 开头 (但也可能不是)
+    # 最稳妥的方式是尝试调用 Wiki 接口，如果成功且 obj_type 为 bitable，则返回 obj_token
+    
+    try:
+        req = GetNodeSpaceRequest.builder().token(token).build()
+        resp = client.wiki.v2.space.get_node(req)
+        
+        if resp.success() and resp.data and resp.data.node:
+             node = resp.data.node
+             if node.obj_type == "bitable":
+                 return node.obj_token
+             # 如果是其他类型，说明不是多维表，返回 None (或者 log warning)
+             try:
+                 import sys
+                 sys.stderr.write(f"[FEISHU] Wiki Node {token} pointing to {node.obj_type}, expected bitable.\n")
+             except Exception:
+                 pass
+             return None
+             
+        # 如果调用失败（例如 token 不存在，或者不是 wiki token），
+        # 这里存在一种情况：用户提供的本身就是 App Token，但误判为 Wiki Token (虽然 URL解析通过 base/wiki 区分了)
+        # 但为了健壮性，如果 Wiki 接口报错，我们可以假设它可能已经是 App Token (如果调用方逻辑允许)
+        # 不过根据 parse_bitable_url 的逻辑，我们通常能区分来源。
+        return None
+        
+    except Exception as e:
+        try:
+            import sys
+            sys.stderr.write(f"[FEISHU] resolve_wiki_token error: {e}\n")
+        except Exception:
+            pass
+        return None
 
 
 def get_feishu_config(config: dict) -> dict:
@@ -122,21 +179,21 @@ def get_feishu_config(config: dict) -> dict:
     获取飞书配置字典。
     
     优先使用配置中的明确字段，若缺失则尝试从 `bitable_url` 推导 `app_token` 和 `table_id`。
-    
-    Args:
-        config: 总配置字典
-        
-    Returns:
-        包含飞书相关配置的字典
+    注意：从 URL 解析出的 token 可能是 wiki_token，需要在 client 创建后进一步处理。
     """
     fc = config.get("feishu", {})
     if fc.get("bitable_url"):
-        at, tid = parse_bitable_url(fc["bitable_url"])
-        if at:
-            fc["app_token"] = at
+        token, tid = parse_bitable_url(fc["bitable_url"])
+        if token:
+            # 暂时先存入 app_token 字段，后续 upload_items 中会检测并替换
+            fc["app_token"] = token
+            # 标记来源以便后续处理 (可选，但这里我们尽量不污染 config 结构，依赖运行时检测)
+            if "/wiki/" in fc["bitable_url"]:
+                fc["_is_wiki"] = True
         if tid:
             fc["table_id"] = tid
     return fc
+
 
 
 def create_client(app_id: str, app_secret: str) -> lark.Client:
@@ -558,8 +615,39 @@ def upload_items(
     """
     fc = get_feishu_config(config_dict)
     if not all(k in fc for k in ["app_id", "app_secret", "app_token", "table_id"]):
+        # 即使 app_token 存在，也可能是 wiki token，后续会解析
+        # 但如果连基本字段都缺，直接报错
         raise ValueError("飞书配置不完整")
+
+    client = create_client(fc["app_id"], fc["app_secret"])
+    
+    # Wiki Token 解析逻辑
+    if fc.get("_is_wiki") or (fc.get("bitable_url") and "/wiki/" in fc.get("bitable_url", "")):
+        raw_token = fc["app_token"]
+        try:
+             import sys
+             sys.stderr.write(f"[FEISHU] 检测到 Wiki URL，尝试解析真实 App Token...\n")
+        except Exception:
+             pass
+             
+        real_token = resolve_wiki_token(client, raw_token)
+        if real_token:
+            fc["app_token"] = real_token
+            try:
+                sys.stderr.write(f"[FEISHU] Wiki Token 解析成功: {raw_token[:6]}... -> {real_token[:6]}...\n")
+            except Exception:
+                pass
+        else:
+             # 解析失败，可能是权限不足或 token 错误，但我们仍尝试用原 token 继续，
+             # 或者直接报错？通常 Wiki Token 直接用在 Bitable API 会失败。
+             # 打印警告。
+             try:
+                 sys.stderr.write(f"[FEISHU] ⚠ Wiki Token 解析失败，后续操作可能会出错。请检查应用是否有 Wiki 读取权限。\n")
+             except Exception:
+                 pass
+
     base_sig = f"{str(fc.get('app_token') or '').strip()}:{str(fc.get('table_id') or '').strip()}"
+
 
     req_keys = [str(k).strip() for k in (keys or []) if str(k).strip()]
     if not isinstance(base_dir, str):
@@ -814,7 +902,11 @@ def upload_items(
                         mtime = None
                     cached_token = item.get("feishu_file_token")
                     cached_mtime = item.get("pdf_mtime")
-                    if cached_token and mtime is not None and int(cached_mtime or -1) == mtime:
+                    # 检查缓存的 file_token 是否属于当前目标表格
+                    cached_base_sig = item.get("feishu_base_sig")
+                    token_valid_for_current_table = (cached_base_sig == base_sig) if cached_base_sig else False
+                    
+                    if cached_token and token_valid_for_current_table and mtime is not None and int(cached_mtime or -1) == mtime:
                         ftoken = str(cached_token)
                         stats["pdf_skipped"] += 1
                         used_cached_token = True

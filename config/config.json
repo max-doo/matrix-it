@@ -172,11 +172,11 @@
   },
   "llm": {
     "api_key": "",
-    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "base_url": "http://127.0.0.1:8045/v1",
     "max_input_chars": 500000,
     "max_pdf_bytes": 20971520,
     "model": [
-      "qwen-flash"
+      "gemini-3-flash"
     ],
     "multimodal": false,
     "parallel_count": 3,
@@ -271,7 +271,7 @@
         "temperature": 0.5
       }
     },
-    "provider": "dashscope",
+    "provider": "custom",
     "temperature": 0.5
   },
   "ui": {

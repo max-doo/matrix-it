@@ -21,17 +21,36 @@ pub fn find_project_root() -> PathBuf {
 }
 
 /// 解析配置文件路径
-/// 优先使用新路径 `config/config.json`，回退到旧路径 `config.json`
+/// 优先使用用户配置 `config/config.json`，不存在时尝试从打包资源恢复
+/// 恢复优先级：1. 用户配置 2. 从默认配置复制恢复 3. 直接读默认配置 4. 旧路径
 pub fn resolve_config_path(root: &Path) -> PathBuf {
-    let new_path = root.join("config").join("config.json");
-    if new_path.exists() {
-        return new_path;
+    // 1. 优先：用户配置 config/config.json
+    let user_path = root.join("config").join("config.json");
+    if user_path.exists() {
+        return user_path;
     }
+
+    // 2. 用户配置不存在时，尝试从默认配置复制恢复
+    let default_path = root.join("resources").join("config.default.json");
+    if default_path.exists() {
+        if let Some(parent) = user_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::copy(&default_path, &user_path).is_ok() && user_path.exists() {
+            return user_path;
+        }
+        // 复制失败则直接读默认配置
+        return default_path;
+    }
+
+    // 3. 回退：旧路径 config.json
     let legacy = root.join("config.json");
     if legacy.exists() {
         return legacy;
     }
-    new_path
+
+    // 4. 都不存在，返回用户配置路径供后续创建
+    user_path
 }
 
 /// 解析旧版 fields.json 路径

@@ -1,33 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
-    <!-- 引用 WiX UI 扩展的安装目录选择 UI -->
-    <UI Id="CustomUI">
-      <UIRef Id="WixUI_InstallDir" />
-      
-      <!-- 绑定安装目录属性到 APPLICATIONFOLDER -->
-      <Property Id="WIXUI_INSTALLDIR" Value="APPLICATIONFOLDER" />
-      
-      <!-- 配置立即打开选项 -->
-      <Publish Dialog="ExitDialog"
-               Control="Finish"
-               Event="DoAction"
-               Value="LaunchApplication">
-        WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed
-      </Publish>
-    </UI>
-    
-    <!-- 立即打开应用的自定义动作 -->
-    <CustomAction Id="LaunchApplication"
-                  FileKey="matrixit.exe"
-                  ExeCommand=""
-                  Execute="immediate"
-                  Impersonate="yes"
-                  Return="asyncNoWait" />
-    
-    <!-- 立即打开选项的属性配置 -->
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
-    
     <!-- 桌面快捷方式组件 -->
     <DirectoryRef Id="DesktopFolder">
       <Component Id="DesktopShortcut" Guid="8A9F5C3D-1E2B-4F7A-9D6C-2E8B4A7F3C1D">
@@ -35,19 +8,15 @@
                   Name="MatrixIt"
                   Description="MatrixIt - 文献管理工具"
                   Target="[APPLICATIONFOLDER]MatrixIt.exe"
-                  WorkingDirectory="APPLICATIONFOLDER"
-                  Icon="ProductIcon.exe" />
+                  WorkingDirectory="APPLICATIONFOLDER" />
         <RegistryValue Root="HKCU"
                        Key="Software\MatrixIt"
                        Name="DesktopShortcut"
                        Value="1"
                        Type="integer"
                        KeyPath="yes" />
-        <RemoveFolder Id="RemoveDesktopFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveDesktopFolder" Directory="DesktopFolder" On="uninstall" />
       </Component>
     </DirectoryRef>
-    
-    <!-- 产品图标定义 -->
-    <Icon Id="ProductIcon.exe" SourceFile="icons/icon.ico" />
   </Fragment>
 </Wix>

@@ -186,8 +186,10 @@ matrix-it/
 
 项目推荐使用 `config/` 目录下的统一配置文件：
 
-- `config/config.json`：默认配置（可提交，包含 `fields` 定义与 UI 列配置）
-- `config/config.local.json`：本机覆盖配置（建议不要提交）
+- `config/config.json`：默认配置（包含 `fields` 定义与 UI 列配置）
+- `config/config.local.json`：本机覆盖配置（**已在 .gitignore 忽略**）
+
+> ⚠️ **安全提示**：`config/config.json` 当前包含开发环境的 API 密钥。若项目转为 public，必须先清理敏感信息（飞书 App Secret、LLM API Keys 等），或将其加入 `.gitignore`。
 
 复制 [config.local.example.json](./config/config.local.example.json) 为 `config/config.local.json`，至少填写：
 

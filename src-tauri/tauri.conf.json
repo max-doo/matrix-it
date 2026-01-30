@@ -43,7 +43,8 @@
       "binaries/matrixit-sidecar"
     ],
     "resources": [
-      "resources/jcr.db"
+      "resources/jcr.db",
+      "resources/config.default.json"
     ],
     "windows": {
       "wix": {
@@ -58,6 +59,13 @@
         "componentRefs": [
           "DesktopShortcut"
         ]
+      },
+      "nsis": {
+        "displayLanguageSelector": false,
+        "languages": [
+          "SimpChinese"
+        ],
+        "installerIcon": "icons/icon.ico"
       }
     }
   }
