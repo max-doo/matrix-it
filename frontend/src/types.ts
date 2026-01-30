@@ -117,3 +117,24 @@ export type AnalysisFieldRow = {
   rule?: string
   name?: string
 }
+
+/**
+ * 文本高亮标注 (Annotation)
+ * 用于在分析字段中高亮显示文本并添加评论。
+ */
+export type Annotation = {
+  id: string
+  start: number
+  end: number
+  text: string
+  color: string
+  comment?: string
+  createdAt: number
+}
+
+/**
+ * 字段级标注映射
+ * key: 字段名 (e.g. 'tldr', 'key_findings')
+ * value: 该字段下的所有标注
+ */
+export type AnnotationMap = Record<string, Annotation[]>

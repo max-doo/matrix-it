@@ -312,9 +312,7 @@
             "type",
             "publications",
             "rating",
-            "progress",
-            "impact_factor",
-            "journal_tags"
+            "progress"
           ]
         }
       },

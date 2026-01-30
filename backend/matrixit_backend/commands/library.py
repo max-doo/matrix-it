@@ -138,6 +138,15 @@ def load_library(literature_json: str, db_path: str, root_dir: str, config_path:
             base["rating"] = old_rating
         if old_progress is not None:
             base["progress"] = old_progress
+        
+        # 修复 persistence 问题：Zotero 读取会覆盖 meta_extra，需保留其中的 fields（如 text highlighting annotations）
+        old_meta = existing.get("meta_extra")
+        if isinstance(old_meta, dict) and "annotations" in old_meta:
+             new_meta = it.get("meta_extra")
+             if isinstance(new_meta, dict):
+                 new_meta["annotations"] = old_meta["annotations"]
+                 it["meta_extra"] = new_meta
+
         base.setdefault("processed_status", "unprocessed")
         base.setdefault("sync_status", "unsynced")
         if base.get("processed") is True and base.get("sync_status") == "unsynced":

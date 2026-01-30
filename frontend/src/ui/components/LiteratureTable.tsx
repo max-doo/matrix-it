@@ -18,6 +18,7 @@ import {
   PROGRESS_EMOJI_MAP
 } from '../utils/constants'
 import { updateItem } from '../../lib/backend'
+import { TextAnalysisHighlighter } from './TextAnalysisHighlighter'
 
 export type LiteratureTableView = 'zotero' | 'matrix'
 
@@ -187,6 +188,42 @@ function ResizableHeaderCell(props: ResizableHeaderCellProps) {
   )
 }
 
+/**
+ * 排序辅助函数
+ */
+const getRatingScore = (record: LiteratureItem) => {
+  const val = (record as any).rating
+  const ratingScore: Record<string, number> = { High: 3, Medium: 2, Low: 1 }
+  return ratingScore[String(val || '')] || 0
+}
+
+const getProgressScore = (record: LiteratureItem) => {
+  const val = (record as any).progress
+  const progressScore: Record<string, number> = { Finished: 3, Reading: 2, Unread: 1 }
+  return progressScore[String(val || 'Unread')] || 0
+}
+
+const getImpactFactor = (record: LiteratureItem) => {
+  const val = (record as any).meta_extra?.jcr?.impact_factor
+  return typeof val === 'number' ? val : -1
+}
+
+const getQuantileScore = (record: LiteratureItem) => {
+  const q = (record as any).meta_extra?.jcr?.quartile
+  if (q === 'Q1') return 4
+  if (q === 'Q2') return 3
+  if (q === 'Q3') return 2
+  if (q === 'Q4') return 1
+  return 0
+}
+
+const SORTERS: Record<string, (a: LiteratureItem, b: LiteratureItem) => number> = {
+  rating: (a, b) => getRatingScore(a) - getRatingScore(b),
+  progress: (a, b) => getProgressScore(a) - getProgressScore(b),
+  impact_factor: (a, b) => getImpactFactor(a) - getImpactFactor(b),
+  journal_tags: (a, b) => getQuantileScore(a) - getQuantileScore(b),
+}
+
 export function LiteratureTable({
   data,
   view,
@@ -280,6 +317,11 @@ export function LiteratureTable({
     if (!sortState.key) return data
     const { key, order } = sortState
     const sorted = [...data].sort((a, b) => {
+      // 优先使用专用排序器
+      if (SORTERS[key]) {
+        return SORTERS[key](a, b)
+      }
+
       if (key === TITLE_KEY) {
         const at = String(a.title ?? '').trim()
         const bt = String(b.title ?? '').trim()
@@ -778,45 +820,9 @@ export function LiteratureTable({
             ...(fixedWidth ? {} : { onResizeStart: startResize(colKey) }),
           } as unknown as ResizableHeaderCellProps),
           sorter: (a, b) => {
-            // 特殊处理：IF 影响因子（数值排序）
-            if (colKey === 'impact_factor') {
-              const getIF = (rec: unknown) => {
-                const r = rec as { meta_extra?: { jcr?: { impact_factor?: number } } }
-                const val = r.meta_extra?.jcr?.impact_factor
-                return typeof val === 'number' ? val : -1
-              }
-              // 降序排列时，IF 高的在前面；升序时 IF 低的在前面。sorter 返回负数则 a 在前。
-              return getIF(a) - getIF(b)
+            if (SORTERS[colKey]) {
+              return SORTERS[colKey](a, b)
             }
-
-            // 特殊处理：Rating 评分（数值映射排序）
-            if (colKey === 'rating') {
-              const ratingScore: Record<string, number> = { High: 3, Medium: 2, Low: 1 }
-              const getScore = (val: unknown) => ratingScore[String(val || '')] || 0
-              return getScore(a) - getScore(b)
-            }
-
-            // 特殊处理：Progress 进度（状态顺序排序）
-            if (colKey === 'progress') {
-              const progressScore: Record<string, number> = { Finished: 3, Reading: 2, Unread: 1 }
-              const getScore = (val: unknown) => progressScore[String(val || 'Unread')] || 0
-              return getScore(a) - getScore(b)
-            }
-
-            // 特殊处理：期刊标签（按分区权重排序 Q1 > Q2...）
-            if (colKey === 'journal_tags') {
-              const getScore = (rec: unknown) => {
-                const r = rec as { meta_extra?: { jcr?: { quartile?: string } } }
-                const q = r.meta_extra?.jcr?.quartile
-                if (q === 'Q1') return 4
-                if (q === 'Q2') return 3
-                if (q === 'Q3') return 2
-                if (q === 'Q4') return 1
-                return 0
-              }
-              return getScore(a) - getScore(b)
-            }
-
             const av = (a as Record<string, unknown>)[colKey]
             const bv = (b as Record<string, unknown>)[colKey]
             return String(av ?? '').localeCompare(String(bv ?? ''), 'zh-Hans-CN')
@@ -972,6 +978,42 @@ export function LiteratureTable({
             if (v === null || v === undefined || v === '') {
               return <span className="secondary-color">-</span>
             }
+
+            // check if we should use the highlighter (Matrix view + analysis column)
+            // AND we are not in the special handling cases above (though those return early)
+            if (view === 'matrix' && highlightableAnalysisKeys.has(colKey)) {
+              // Construct text exactly as Drawer does to ensure indices match
+              let text = ''
+              if (Array.isArray(v)) {
+                const parts = v.map((x) => String(x ?? '').trim()).filter(Boolean)
+                if (parts.length === 0) return <span className="secondary-color">-</span>
+                text = parts.map((x) => `• ${x}`).join('\n')
+              } else if (typeof v === 'object') {
+                text = JSON.stringify(v)
+              } else {
+                text = String(v)
+              }
+
+              // Extract annotations
+              const metaExtra = (record as any).meta_extra || {}
+              const annotationsMap = metaExtra.annotations || {}
+              const annotations = annotationsMap[colKey] || []
+
+              // Use Highlighter (Read Only)
+              // Note: We skip `highlightText` (search highlight) here because Highlighter expects raw string strings.
+              return (
+                <div className="secondary-color whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                  <TextAnalysisHighlighter
+                    text={text}
+                    fieldKey={colKey}
+                    annotations={annotations}
+                    onChange={() => { }}
+                    readOnly={true}
+                  />
+                </div>
+              )
+            }
+
             if (Array.isArray(v)) {
               const parts = v.map((x) => String(x ?? '').trim()).filter(Boolean)
               if (parts.length === 0) return <span className="secondary-color">-</span>

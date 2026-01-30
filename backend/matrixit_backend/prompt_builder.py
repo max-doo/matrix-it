@@ -50,8 +50,7 @@ def load_default_system_prompt(fields_def: Optional[dict] = None, preferred_orde
             continue
         desc = str(v.get("description") or "").strip()
         rule = rule_by_key.get(k) or ""
-        prefix = f"【规则{rule}】" if rule else ""
-        analysis_fields_obj[k] = f"{prefix}{desc}".strip()
+        analysis_fields_obj[k] = desc.strip()
     analysis_fields_block = json.dumps(analysis_fields_obj, ensure_ascii=False, indent=2)
 
     replacements = {

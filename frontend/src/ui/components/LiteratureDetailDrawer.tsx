@@ -3,9 +3,11 @@
  * 功能描述: 侧滑展示单篇文献的详细信息，包含“Zotero 原生信息”和“Matrix 矩阵分析”两种视图。
  *           支持在 Matrix 视图下编辑分析字段，并提供上下篇切换导航。
  */
+import { TextAnalysisHighlighter } from './TextAnalysisHighlighter'
+import type { Annotation, AnnotationMap } from '../../types'
 import { CloseOutlined, LeftOutlined, ReadOutlined, RightOutlined } from '@ant-design/icons'
 import { App, Button, Descriptions, Drawer, Space, Tag, Typography, Input, Tooltip, Dropdown } from 'antd'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { openExternal, openPath, openPdfInBrowser, resolvePdfPath } from '../../lib/backend'
 import type { LiteratureItem } from '../../types'
 import { formatAuthor, formatIF, getJournalTags, getLiteratureTypeMeta } from '../utils/ui-formatters'
@@ -60,7 +62,34 @@ export function LiteratureDetailDrawer({
   canNext,
 }: LiteratureDetailDrawerProps) {
   const { modal } = App.useApp()
+
+  const annotationsMap = useMemo(() => {
+    const raw = (item as any)?.meta_extra?.annotations
+    return (raw || {}) as AnnotationMap
+  }, [item])
+
+  const handleUpdateAnnotations = useCallback(
+    (fieldKey: string, newAnnotations: Annotation[]) => {
+      if (!item || !onItemPatch) return
+
+      const nextMap = { ...annotationsMap, [fieldKey]: newAnnotations }
+      // 构造完整的 meta_extra
+      const currentMeta = (item as any).meta_extra || {}
+      const nextMeta = { ...currentMeta, annotations: nextMap }
+
+      onItemPatch(item.item_key, { meta_extra: nextMeta })
+    },
+    [annotationsMap, item, onItemPatch]
+  )
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth))
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  // 切换条目时自动滚动到顶部
+  useEffect(() => {
+    if (item?.item_key && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0
+    }
+  }, [item?.item_key])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -222,23 +251,39 @@ export function LiteratureDetailDrawer({
   const handleSave = useCallback(async () => {
     if (!item || !onSave) return
     const patch: Record<string, unknown> = {}
+    let metaExtraChanged = false
+    const currentMeta = (item as any).meta_extra || {}
+    let nextAnnotations = { ...((currentMeta.annotations || {}) as AnnotationMap) }
+
     for (const f of analysisFields) {
       const prev = f.type === 'multi_select' ? normalizeMultiSelectValue(snapshot[f.key] ?? '') : normalizeTextValue(snapshot[f.key] ?? '')
       const next = f.type === 'multi_select' ? normalizeMultiSelectValue(draft[f.key] ?? '') : normalizeTextValue(draft[f.key] ?? '')
+
       if (prev === next) continue
+
+      // Field Changed
       if (f.type === 'multi_select') {
-        patch[f.key] = next
-          .split(/[,，;；]/)
-          .map((s) => s.trim())
-          .filter(Boolean)
-        continue
+        patch[f.key] = next.split(/[,，;；]/).map((s) => s.trim()).filter(Boolean)
+      } else {
+        patch[f.key] = next.trim()
       }
-      patch[f.key] = next.trim()
+
+      // Cleanup Annotations for this field
+      if (nextAnnotations[f.key] && nextAnnotations[f.key].length > 0) {
+        delete nextAnnotations[f.key]
+        metaExtraChanged = true
+      }
     }
-    if (Object.keys(patch).length === 0) {
+
+    if (Object.keys(patch).length === 0 && !metaExtraChanged) {
       setIsEditing(false)
       return
     }
+
+    if (metaExtraChanged) {
+      patch.meta_extra = { ...currentMeta, annotations: nextAnnotations }
+    }
+
     setSaving(true)
     try {
       await onSave(item.item_key, patch)
@@ -504,7 +549,7 @@ export function LiteratureDetailDrawer({
             </div>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-auto flex flex-col gap-4 pt-3">
+          <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-auto flex flex-col gap-4 pt-3">
             {mode === 'matrix' ? (
               <div className="flex flex-col gap-5">
                 <div className="flex flex-col gap-2">
@@ -687,7 +732,13 @@ export function LiteratureDetailDrawer({
                               <div className="text-sm font-semibold text-slate-900">{f.label}</div>
                             </div>
                             <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                              <div className="text-sm leading-6 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{v}</div>
+                              <TextAnalysisHighlighter
+                                text={v}
+                                fieldKey={f.key}
+                                annotations={annotationsMap[f.key] || []}
+                                onChange={(newAnns) => handleUpdateAnnotations(f.key, newAnns)}
+                                readOnly={false}
+                              />
                             </div>
                           </section>
                         )
@@ -732,7 +783,15 @@ export function LiteratureDetailDrawer({
                         return (
                           <section key={f.key} className="flex flex-col gap-2">
                             <div className="text-sm font-semibold text-slate-900">{f.label}</div>
-                            <div className="text-sm leading-6 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{v}</div>
+                            <div className="text-sm leading-6 text-slate-800">
+                              <TextAnalysisHighlighter
+                                text={v}
+                                fieldKey={f.key}
+                                annotations={annotationsMap[f.key] || []}
+                                onChange={(newAnns) => handleUpdateAnnotations(f.key, newAnns)}
+                                readOnly={false}
+                              />
+                            </div>
                           </section>
                         )
                       })}
