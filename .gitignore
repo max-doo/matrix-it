@@ -23,10 +23,13 @@ __pycache__/
 data/*.db
 *.sqlite
 *.sqlite3
+*.db
+# Allow specific database files to be committed (must be after *.db)
+!data/jcr.db
+!data/matrixit.db
 pdfs/
 literature.json
 api key.md
-*.db
 
 # Config (Secrets)
 .env
@@ -42,4 +45,11 @@ frontend/dist/
 src-tauri/target/
 src-tauri/gen/
 src-tauri/binaries/pyi-build/
+src-tauri/binaries/pyi-work/
 src-tauri/binaries/*.exe
+
+# Data Exports (Development)
+data/matrixit-open-pdf.html
+
+# Test Outputs
+pdf2md-test.md
