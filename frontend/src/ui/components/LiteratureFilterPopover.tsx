@@ -7,6 +7,7 @@ import { Button, Input, Popover, Select, Tag } from 'antd'
 import { getLiteratureTypeMeta } from '../utils/ui-formatters'
 import { FilterOutlined } from '@ant-design/icons'
 import type { FilterMode } from '../../types'
+import { RATING_OPTIONS, PROGRESS_OPTIONS } from '../utils/constants'
 
 type MatchMode = 'all' | 'any'
 
@@ -17,11 +18,13 @@ export type LiteratureFilterPopoverValue = {
   match: MatchMode
   yearOp: YearOperator
   year: string
-  type: string
+  type: string[]
   publications: string
   tags?: string[]
   keywords?: string[]
   bibType?: string
+  rating?: string
+  progress?: string
 }
 
 export type LiteratureFilterPopoverProps = {
@@ -67,16 +70,20 @@ export function LiteratureFilterPopover({
     const tags = value.tags ?? []
     const keywords = value.keywords ?? []
     const bibType = value.bibType ?? ''
+    const rating = value.rating ?? ''
+    const progress = value.progress ?? ''
     return (
       (value.statusMode !== 'all' && !hideStatus) ||
       value.year.trim().length > 0 ||
-      value.type.trim().length > 0 ||
+      value.type.length > 0 ||
       value.publications.trim().length > 0 ||
       tags.length > 0 ||
       keywords.length > 0 ||
-      bibType.trim().length > 0
+      bibType.trim().length > 0 ||
+      rating.length > 0 ||
+      progress.length > 0
     )
-  }, [disabled, value.publications, value.statusMode, value.type, value.year, value.tags, value.keywords, value.bibType, hideStatus])
+  }, [disabled, value.publications, value.statusMode, value.type, value.year, value.tags, value.keywords, value.bibType, value.rating, value.progress, hideStatus])
 
   const activeButtonStyle = useMemo(() => {
     if (!hasActiveFilters) return undefined
@@ -159,11 +166,13 @@ export function LiteratureFilterPopover({
 
           <div className="grid grid-cols-[56px_54px_minmax(160px,1fr)] items-center gap-x-1 gap-y-1">
             <div className="h-8 flex items-center justify-end pr-1 text-sm text-slate-700 select-none">类型</div>
-            <div className="h-8 flex items-center justify-center text-sm text-slate-700 select-none">=</div>
+            <div className="h-8 flex items-center justify-center text-sm text-slate-700 select-none">∈</div>
             <Select
+              mode="multiple"
               allowClear
-              value={value.type || undefined}
-              onChange={(v) => update({ type: String(v ?? '') })}
+              maxTagCount="responsive"
+              value={value.type}
+              onChange={(v) => update({ type: v })}
               className="w-full"
               placeholder="请选择"
               options={typeOptions.map(opt => {
@@ -184,6 +193,32 @@ export function LiteratureFilterPopover({
               value={value.publications}
               placeholder="请输入（模糊匹配）"
               onChange={(e) => update({ publications: e.target.value })}
+            />
+          </div>
+
+          <div className="grid grid-cols-[56px_54px_minmax(160px,1fr)] items-center gap-x-1 gap-y-1">
+            <div className="h-8 flex items-center justify-end pr-1 text-sm text-slate-700 select-none">评分</div>
+            <div className="h-8 flex items-center justify-center text-sm text-slate-700 select-none">=</div>
+            <Select
+              allowClear
+              value={value.rating || undefined}
+              onChange={(v) => update({ rating: String(v ?? '') })}
+              className="w-full"
+              placeholder="请选择"
+              options={RATING_OPTIONS.map(opt => ({ value: opt.key, label: opt.label }))}
+            />
+          </div>
+
+          <div className="grid grid-cols-[56px_54px_minmax(160px,1fr)] items-center gap-x-1 gap-y-1">
+            <div className="h-8 flex items-center justify-end pr-1 text-sm text-slate-700 select-none">进度</div>
+            <div className="h-8 flex items-center justify-center text-sm text-slate-700 select-none">=</div>
+            <Select
+              allowClear
+              value={value.progress || undefined}
+              onChange={(v) => update({ progress: String(v ?? '') })}
+              className="w-full"
+              placeholder="请选择"
+              options={PROGRESS_OPTIONS.map(opt => ({ value: opt.key, label: opt.label }))}
             />
           </div>
 
@@ -236,7 +271,7 @@ export function LiteratureFilterPopover({
                   mode="multiple"
                   allowClear
                   maxTagCount="responsive"
-                value={value.keywords ?? []}
+                  value={value.keywords ?? []}
                   onChange={(v) => update({ keywords: v })}
                   className="w-full"
                   placeholder="请选择"
@@ -256,11 +291,13 @@ export function LiteratureFilterPopover({
                 match: 'all',
                 yearOp: 'eq',
                 year: '',
-                type: '',
+                type: [],
                 publications: '',
                 tags: [],
                 keywords: [],
                 bibType: '',
+                rating: '',
+                progress: '',
               })
             }
           >

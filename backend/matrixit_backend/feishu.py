@@ -556,7 +556,7 @@ def map_item(item: dict, mapping: Dict[str, str], file_token: Optional[str], fie
         ftype = fields_info.get(fk, {}).get("type", 0)
         if ftype == FIELD_TYPE_MULTI_SELECT:
             if isinstance(val, str):
-                val = [p.strip() for p in re.split(r"[,，]", val) if p.strip()]
+                val = [p.strip() for p in re.split(r"[,，;；]", val) if p.strip()]
             elif not isinstance(val, list):
                 val = [val]
             val = [str(x).strip() for x in (val or []) if str(x).strip()]

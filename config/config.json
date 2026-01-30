@@ -173,7 +173,7 @@
   "llm": {
     "api_key": "",
     "base_url": "http://127.0.0.1:8045/v1",
-    "max_input_chars": 500000,
+    "max_input_chars": 100000,
     "max_pdf_bytes": 20971520,
     "model": [
       "gemini-3-flash"
@@ -197,7 +197,6 @@
       },
       "deepseek": {
         "api_key": "",
-        "base_url": "https://api.siliconflow.cn/v1",
         "max_input_chars": 100000,
         "max_pdf_bytes": 20971520,
         "model": [],
@@ -206,7 +205,6 @@
       },
       "doubao": {
         "api_key": "",
-        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "max_input_chars": 100000,
         "max_pdf_bytes": 20971520,
         "model": [],
@@ -263,7 +261,6 @@
       },
       "zhipu": {
         "api_key": "",
-        "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "max_input_chars": 100000,
         "max_pdf_bytes": 20971520,
         "model": [],

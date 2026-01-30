@@ -171,7 +171,7 @@ export function LiteratureDetailDrawer({
     (v: string) =>
       String(v ?? '')
         .replace(/\r\n/g, '\n')
-        .split(',')
+        .split(/[,，;；]/)
         .map((s) => s.trim())
         .filter(Boolean)
         .join(', '),
@@ -228,7 +228,7 @@ export function LiteratureDetailDrawer({
       if (prev === next) continue
       if (f.type === 'multi_select') {
         patch[f.key] = next
-          .split(',')
+          .split(/[,，;；]/)
           .map((s) => s.trim())
           .filter(Boolean)
         continue
@@ -700,7 +700,7 @@ export function LiteratureDetailDrawer({
                         const arr = Array.isArray(raw)
                           ? raw.map((x) => String(x || '').trim()).filter(Boolean)
                           : toText(raw)
-                            .split(',')
+                            .split(/[,，;；]/)
                             .map((s) => s.trim())
                             .filter(Boolean)
                         if (arr.length === 0) return null

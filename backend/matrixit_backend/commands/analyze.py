@@ -42,11 +42,15 @@ def _analysis_build_messages(system_prompt: str, user_prompt: str, pdf_text: str
     return messages, user_content, text_in, max_chars
 
 
-def _analysis_apply_result(it: dict, item_key: str, result: object, analysis_fields: set, emit_debug) -> bool:
+def _analysis_apply_result(it: dict, item_key: str, result: object, analysis_fields_def: dict, emit_debug) -> bool:
     """将 LLM 返回的结果应用到条目。"""
     if not isinstance(result, dict):
         return False
-    accepted = {fk: fv for fk, fv in result.items() if fk in analysis_fields}
+    
+    # 提取所有被允许的字段键
+    allowed_keys = set(analysis_fields_def.keys())
+    accepted = {fk: fv for fk, fv in result.items() if fk in allowed_keys}
+    
     try:
         emit_debug(
             item_key,
@@ -58,10 +62,31 @@ def _analysis_apply_result(it: dict, item_key: str, result: object, analysis_fie
         )
     except Exception:
         pass
+    
     if not accepted:
         return False
+        
+    import re
     for fk, fv in accepted.items():
-        it[fk] = fv
+        # 数据清洗：针对 multi_select 类型字段进行规范化
+        field_def = analysis_fields_def.get(fk, {})
+        if isinstance(field_def, dict) and field_def.get("type") == "multi_select":
+            # 1. 如果是列表，用英文逗号连接
+            if isinstance(fv, list):
+                # 过滤空值并 strip
+                parts = [str(x).strip() for x in fv if x]
+                it[fk] = ", ".join(parts)
+            # 2. 如果是字符串，尝试分割（兼容中文逗号/分号/换行）并重新连接
+            elif isinstance(fv, str):
+                # 支持的分隔符：英文逗号, 中文逗号，, 英文分号;, 中文分号；, 换行符\n
+                parts = re.split(r"[,，;；\n]", fv)
+                parts = [p.strip() for p in parts if p.strip()]
+                it[fk] = ", ".join(parts)
+            else:
+                it[fk] = fv
+        else:
+            it[fk] = fv
+            
     return True
 
 
@@ -102,7 +127,7 @@ def _analyze_parallel(
     base_dir: str,
     system_prompt: str,
     user_prompt: str,
-    analysis_fields: set,
+    analysis_fields_def: dict,
     db_path: str,
     literature_json: str,
     emit_debug,
@@ -132,7 +157,7 @@ def _analyze_parallel(
     original_status_map: Dict[str, str] = {}
     pdf_path_map: Dict[str, str] = {}
 
-    if not analysis_fields:
+    if not analysis_fields_def:
         for k in keys:
             it = idx.get(str(k))
             if not it:
@@ -203,7 +228,9 @@ def _analyze_parallel(
 
     t_pdf_start = time.monotonic()
     futures_map = {}
-    executor_cls = ThreadPoolExecutor if getattr(sys, "frozen", False) else ProcessPoolExecutor
+    # Fix: Windows parallel analysis issue where ProcessPoolExecutor causes PDF_TEXT_EMPTY
+    # for subsequent items. Always use ThreadPoolExecutor for stability.
+    executor_cls = ThreadPoolExecutor
     with executor_cls(max_workers=pdf_workers) as executor:
         for item_key, pdf_path in pdf_path_map.items():
             futures_map[executor.submit(pdf.extract_pdf_text, pdf_path)] = item_key
@@ -268,7 +295,7 @@ def _analyze_parallel(
         
         if result.get("success"):
             llm_result = result.get("result", {})
-            ok = _analysis_apply_result(it, item_key, llm_result, analysis_fields, emit_debug)
+            ok = _analysis_apply_result(it, item_key, llm_result, analysis_fields_def, emit_debug)
             if not ok:
                 it["processed_status"] = restore_status
                 it["sync_status"] = "unsynced"
@@ -503,7 +530,14 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
         user_prompt = "按照系统提示词解读论文，请严格输出一个 JSON 对象，不要输出 Markdown，不要输出多余说明。"
     except Exception:
         user_prompt = "按照系统提示词解读论文，请严格输出一个 JSON 对象，不要输出 Markdown，不要输出多余说明。"
-    analysis_fields = set(prompt_builder.get_analysis_fields(fields_def).keys())
+    except Exception:
+        user_prompt = "按照系统提示词解读论文，请严格输出一个 JSON 对象，不要输出 Markdown，不要输出多余说明。"
+    
+    # 获取完整的字段定义字典，以便后续清洗数据
+    analysis_fields_def = prompt_builder.get_analysis_fields(fields_def)
+    # 兼容旧逻辑，但实际已不再直接使用 set
+    # analysis_fields = set(analysis_fields_def.keys())
+
     try:
         ordered_keys, _ = prompt_builder.build_output_schema_hint(
             fields_def, preferred_order if isinstance(preferred_order, list) else None
@@ -529,7 +563,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
                 base_dir=base_dir,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                analysis_fields=analysis_fields,
+                analysis_fields_def=analysis_fields_def,
                 db_path=db_path,
                 literature_json=literature_json,
                 emit_debug=emit_debug,
@@ -620,7 +654,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
 
         it["tldr"] = text.strip().replace("\n", " ")[:300]
 
-        if not analysis_fields:
+        if not analysis_fields_def:
             failed_count += 1
             _analysis_restore_and_emit_failed(
                 storage=storage,
@@ -728,7 +762,7 @@ def analyze(literature_json: str, db_path: str, root_dir: str, config_path: str,
             failed_count += 1
             continue
 
-        ok = _analysis_apply_result(it, str(k), result, analysis_fields, emit_debug)
+        ok = _analysis_apply_result(it, str(k), result, analysis_fields_def, emit_debug)
         if not ok:
             returned_keys = []
             if isinstance(result, dict):

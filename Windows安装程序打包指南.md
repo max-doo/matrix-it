@@ -25,27 +25,34 @@
 
 ## 打包命令
 
-### 1. 确保前端已构建
-```powershell
-cd frontend
-npm run build
-```
-
-### 2. 构建 Sidecar（如有更新）
+### 1. 构建 Sidecar (后端)
+首先构建 Python 后端（如果 Python 代码有变更）：
 ```powershell
 .\scripts\build_sidecar.ps1
 ```
 
-### 3. 打包安装程序
+### 2. 打包安装程序 (前端 + Rust)
+Tauri 会根据配置**自动执行** `npm run build` 构建前端，无需手动运行。
 ```powershell
 cd src-tauri
 cargo tauri build
 ```
 
+## 高效构建技巧
+
+### 并行构建
+前端和后端构建互不干扰，可以打开两个终端同时执行上述第1步和第2步。
+
+### 跳过不必要的构建
+如果只修改了 WiX 配置或仅仅想重新打 MSI 包，而**代码没有变更**：
+
+1. **跳过后端**：不要运行 `build_sidecar.ps1`，打包程序会自动使用 `src-tauri/binaries` 下现有的 `.exe`。
+2. **跳过前端**：临时修改 `tauri.conf.json`，设置 `"beforeBuildCommand": null`，Tauri 将直接使用现有的 `frontend/dist` 资源。
+
 ### 4. 安装包位置
 打包成功后，安装程序位于：
 ```
-src-tauri/target/release/bundle/msi/MatrixIt_0.1.0_x64_zh-CN.msi
+src-tauri/target/release/bundle/msi/MatrixIt_1.0.0_x64_zh-CN.msi
 ```
 
 ## 测试清单

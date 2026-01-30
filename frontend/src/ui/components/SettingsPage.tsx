@@ -43,7 +43,7 @@ const PROVIDERS = [
   { label: '阿里云百炼', value: 'dashscope', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   { label: 'DeepSeek', value: 'deepseek', baseUrl: 'https://api.deepseek.com' },
   { label: '智谱 GLM', value: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
-  { label: '字节豆包', value: 'doubao', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3' },
+  { label: '字节火山引擎', value: 'doubao', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3' },
   { label: 'OpenRouter', value: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1' }
 ]
 
@@ -119,7 +119,12 @@ function LLMSettingsForm({ configForm }: { configForm: FormInstance }) {
     if (targetProfile) {
       // 有存档，加载 provider 特定配置（不包含 temperature）
       const { parallel_count_max: _pMax, multimodal_parallel_count_max: _mMax, temperature: _temp, ...rest } = targetProfile as Record<string, any>
-      nextValues = { ...rest }
+      nextValues = {
+        api_key: '',
+        base_url: '',
+        model: [],
+        ...rest
+      }
       // 修正：如果存档中 Base URL 为空且非 Custom，则填充默认 URL
       if (!nextValues.base_url && newProvider !== 'custom') {
         const pData = PROVIDERS.find(x => x.value === newProvider)

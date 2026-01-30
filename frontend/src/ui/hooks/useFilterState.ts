@@ -9,11 +9,13 @@ export type FieldFilterState = {
     match: 'all' | 'any'
     yearOp: 'eq' | 'gt' | 'lt'
     year: string
-    type: string
+    type: string[]
     publications: string
     tags: string[]
     keywords: string[]
     bibType: string
+    rating?: string
+    progress?: string
 }
 
 export function useFilterState(activeView: string) {
@@ -24,11 +26,13 @@ export function useFilterState(activeView: string) {
         match: 'all',
         yearOp: 'eq',
         year: '',
-        type: '',
+        type: [],
         publications: '',
         tags: [],
         keywords: [],
         bibType: '',
+        rating: '',
+        progress: '',
     })
     const [searchQuery, setSearchQuery] = useState('')
     const [searchPopoverOpen, setSearchPopoverOpen] = useState(false)
@@ -122,13 +126,12 @@ export function useFilteredItems(
             })
         }
 
-        // type 筛选
-        const typeRaw = fieldFilter.type.trim()
-        if (typeRaw) {
-            const target = normalizeText(typeRaw)
+        // type 筛选 (Multi-select)
+        if (fieldFilter.type.length > 0) {
+            const targetSet = new Set(fieldFilter.type.map(t => normalizeText(t)))
             predicates.push((it) => {
                 const v = ((it as unknown as Record<string, unknown>).type ?? it.bib_type ?? '') as unknown
-                return normalizeText(v) === target
+                return targetSet.has(normalizeText(v))
             })
         }
 
@@ -165,6 +168,22 @@ export function useFilteredItems(
                     currentKeywords = val.split(/[,，;；\n]/).map((s) => s.trim()).filter(Boolean)
                 }
                 return currentKeywords.some((k) => targetSet.has(k))
+            })
+        }
+
+        // Rating 筛选
+        if (fieldFilter.rating) {
+            predicates.push((it) => {
+                const r = (it as Record<string, unknown>).rating
+                return String(r ?? '') === fieldFilter.rating
+            })
+        }
+
+        // Progress 筛选
+        if (fieldFilter.progress) {
+            predicates.push((it) => {
+                const p = (it as Record<string, unknown>).progress
+                return String(p ?? '') === fieldFilter.progress
             })
         }
 

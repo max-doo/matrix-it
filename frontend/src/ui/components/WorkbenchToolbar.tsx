@@ -225,6 +225,8 @@ export function WorkbenchToolbar({
             tags: fieldFilter.tags,
             keywords: fieldFilter.keywords,
             bibType: fieldFilter.bibType,
+            rating: fieldFilter.rating,
+            progress: fieldFilter.progress,
           }}
           onChange={(next) => {
             setFilterMode(next.statusMode)
@@ -237,6 +239,8 @@ export function WorkbenchToolbar({
               tags: next.tags ?? [],
               keywords: next.keywords ?? [],
               bibType: next.bibType ?? '',
+              rating: next.rating,
+              progress: next.progress,
             })
           }}
           yearOptions={yearOptions}

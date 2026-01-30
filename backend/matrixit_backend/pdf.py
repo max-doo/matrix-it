@@ -10,9 +10,15 @@ PDF 相关工具模块。
 
 import os
 import sys
+import threading
 from typing import List, Optional
 
 import pymupdf4llm
+
+# PyMuPDF4LLM 本身可能存在线程安全问题（如全局状态或 C 扩展冲突）
+# 在多线程/多进程环境下并发调用 to_markdown 容易引发 AttributeError 或段错误
+# 因此使用全局锁强制串行化 PDF 解析过程
+_PyMuPDF_LOCK = threading.Lock()
 
 
 def extract_pdf_text(pdf_path: str, max_pages: Optional[int] = 100) -> str:
@@ -48,8 +54,23 @@ def extract_pdf_text(pdf_path: str, max_pages: Optional[int] = 100) -> str:
             actual_pages = min(max_pages, total_pages)
             pages_arg = list(range(actual_pages))
         
-        md_text: str = pymupdf4llm.to_markdown(pdf_path, pages=pages_arg)
-        return md_text if md_text else ""
+        try:
+            # 强制串行化执行 to_markdown，避免并发竞态
+            with _PyMuPDF_LOCK:
+                md_text: str = pymupdf4llm.to_markdown(pdf_path, pages=pages_arg)
+            return md_text if md_text else ""
+        except AttributeError as e:
+            # pymupdf4llm 可能会因为表格解析失败抛出 AttributeError: 'NoneType' object has no attribute 'tables'
+            # 遇到此类内部错误时，回退到基础文本提取
+            sys.stderr.write(f"[PDF] pymupdf4llm failed ({e}), falling back to basic text extraction.\n")
+            doc = pymupdf.open(pdf_path)
+            text_parts = []
+            pages_to_extract = pages_arg if pages_arg is not None else range(len(doc))
+            for i in pages_to_extract:
+                if i < len(doc):
+                    text_parts.append(doc[i].get_text())
+            doc.close()
+            return "\n\n".join(text_parts)
     except Exception as e:
         sys.stderr.write(f"[PDF] extract_pdf_text error: {type(e).__name__}: {e}\n")
         sys.stderr.flush()
