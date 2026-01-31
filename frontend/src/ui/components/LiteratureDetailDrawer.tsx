@@ -6,9 +6,11 @@
 import { TextAnalysisHighlighter } from './TextAnalysisHighlighter'
 import type { Annotation, AnnotationMap } from '../../types'
 import { CloseOutlined, LeftOutlined, ReadOutlined, RightOutlined } from '@ant-design/icons'
-import { App, Button, Descriptions, Drawer, Space, Tag, Typography, Input, Tooltip, Dropdown } from 'antd'
+import { App, Button, Descriptions, Drawer, Space, Tag, Typography, Input, Tooltip, Dropdown, message } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { openExternal, openPath, openPdfInBrowser, resolvePdfPath } from '../../lib/backend'
+import { useContextMenu } from './GlobalContextMenu'
+import { CopyOutlined, LinkOutlined } from '@ant-design/icons'
 import type { LiteratureItem } from '../../types'
 import { formatAuthor, formatIF, getJournalTags, getLiteratureTypeMeta } from '../utils/ui-formatters'
 import {
@@ -62,6 +64,7 @@ export function LiteratureDetailDrawer({
   canNext,
 }: LiteratureDetailDrawerProps) {
   const { modal } = App.useApp()
+  const { showMenu } = useContextMenu()
 
   const annotationsMap = useMemo(() => {
     const raw = (item as any)?.meta_extra?.annotations
@@ -465,6 +468,78 @@ export function LiteratureDetailDrawer({
     </Button>
   )
 
+  const handleMetadataContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      // 仅在非 Matrix 模式下（即 Zotero 详情）生效，或通用？
+      // 用户要求：在抽屉的元数据视图，右键菜单要支持复制文字和复制链接的功能
+      // 这通常指 Zotero 视图。Matrix 视图也是元数据，但如果是编辑态，上面已放行原生菜单。
+      // 如果是 Matrix 视图的阅读态，也应该支持。
+
+      const target = e.target as HTMLElement
+      // 检查是否是输入框，如果是，则不干预（让原生菜单处理，GlobalContextMenuProvider 已放行）
+      const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      if (isInput) return
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      const selection = window.getSelection()
+      const selectedText = selection?.toString().trim()
+      const link = target.closest('a')
+      const href = link?.getAttribute('href')
+      const linkText = link?.innerText.trim()
+
+      const menuItems: any[] = []
+
+      if (selectedText && !selection?.isCollapsed) {
+        menuItems.push({
+          key: 'copy-text',
+          label: '复制',
+          icon: <CopyOutlined />,
+          onClick: () => {
+            void navigator.clipboard.writeText(selectedText)
+            message.success('已复制')
+          }
+        })
+      } else if (target.innerText && target.innerText.trim()) {
+        // 如果没有选中文本，但点击了有文本的元素？
+        // 自动全选并复制？或者只提供“复制全部”？
+        // 用户习惯：通常右键不选中文本时，不应该复制文本，除非是特定组件。
+        // 但为了方便，可以提供“复制单元格内容”？
+        // 暂时只响应选区和链接。如果没选区也没链接，显示什么？
+        // 可以尝试获取点击位置的文本？
+      }
+
+      if (href) {
+        menuItems.push({
+          key: 'copy-link',
+          label: '复制链接地址',
+          icon: <LinkOutlined />,
+          onClick: () => {
+            void navigator.clipboard.writeText(href)
+            message.success('已复制链接')
+          }
+        })
+        if (linkText && (!selectedText || selectedText !== linkText)) {
+          menuItems.push({
+            key: 'copy-link-text',
+            label: '复制链接文字',
+            icon: <CopyOutlined />,
+            onClick: () => {
+              void navigator.clipboard.writeText(linkText)
+              message.success('已复制')
+            }
+          })
+        }
+      }
+
+      if (menuItems.length > 0) {
+        showMenu(menuItems, { x: e.clientX, y: e.clientY })
+      }
+    },
+    [showMenu]
+  )
+
   return (
     <Drawer
       title={null}
@@ -799,7 +874,7 @@ export function LiteratureDetailDrawer({
                 )}
               </div>
             ) : (
-              <>
+              <div onContextMenu={handleMetadataContextMenu}>
                 <Typography.Title level={5} className="!my-0 break-words text-slate-900">
                   {item.title || '详情'}
                 </Typography.Title>
@@ -1003,7 +1078,7 @@ export function LiteratureDetailDrawer({
                   </Descriptions.Item>
 
                 </Descriptions>
-              </>
+              </div>
             )}
           </div>
         </div>

@@ -1,8 +1,9 @@
 
-import { DeleteOutlined, HighlightOutlined, MessageOutlined } from '@ant-design/icons'
-import { Button, Input, Popover, Space, theme, Tooltip } from 'antd'
+import { DeleteOutlined, HighlightOutlined, MessageOutlined, CopyOutlined, EyeOutlined, FileTextOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { Button, Input, Popover, Space, theme, Tooltip, message } from 'antd'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Annotation } from '../../types'
+import { useContextMenu } from './GlobalContextMenu'
 
 export type TextAnalysisHighlighterProps = {
     text: string
@@ -10,6 +11,9 @@ export type TextAnalysisHighlighterProps = {
     annotations: Annotation[]
     onChange: (newAnnotations: Annotation[]) => void
     readOnly?: boolean
+    onAnalyze?: (text: string, id?: string) => void
+    onViewDetails?: (id: string) => void
+    onReadOriginal?: (id: string) => void
 }
 
 type SelectionState = {
@@ -32,10 +36,14 @@ export function TextAnalysisHighlighter({
     annotations,
     onChange,
     readOnly = false,
+    onAnalyze,
+    onViewDetails,
+    onReadOriginal,
 }: TextAnalysisHighlighterProps) {
     const containerRef = useRef<HTMLDivElement>(null)
     const [selectionState, setSelectionState] = useState<SelectionState | null>(null)
     const [commentDraft, setCommentDraft] = useState('')
+    const { showMenu } = useContextMenu()
 
     const { token } = theme.useToken()
 
@@ -90,7 +98,16 @@ export function TextAnalysisHighlighter({
 
             if (ann.comment) {
                 nodes.push(
-                    <Tooltip key={`tooltip-${ann.id}`} title={ann.comment} color="#1e293b">
+                    <Tooltip
+                        key={`tooltip-${ann.id}`}
+                        title={
+                            <div className="whitespace-pre-wrap break-words">
+                                {ann.comment}
+                            </div>
+                        }
+                        color="#1e293b"
+                        overlayStyle={{ maxWidth: 500 }}
+                    >
                         {highlightSpan}
                     </Tooltip>
                 )
@@ -154,8 +171,7 @@ export function TextAnalysisHighlighter({
         })
 
         if (isOverlap) {
-            // V1 不支持重叠高亮
-            selection.removeAllRanges()
+            // V1 不支持重叠高亮，但不清除选区，允许用户复制文本
             return
         }
 
@@ -262,38 +278,110 @@ export function TextAnalysisHighlighter({
         return () => document.removeEventListener('mousedown', onClickGlobal)
     }, [selectionState])
 
-    // 虚拟元素用于 Popover 定位
-    const getPopupContainer = () => document.body
-    // 构造一个虚拟的 DOM 元素给 Popover
-    const virtualEl = useMemo(() => {
-        if (!selectionState?.rect) return null
-        const { left, top, width, height } = selectionState.rect
-        return {
-            getBoundingClientRect: () => DOMRect.fromRect({ x: left, y: top, width, height }),
-            clientWidth: width,
-            clientHeight: height,
-        } as HTMLElement
-    }, [selectionState])
+    // Context Menu Handler
+    const handleContextMenu = useCallback(
+        (e: React.MouseEvent) => {
+            const target = e.target as HTMLElement
+            const annotationId = target.getAttribute('data-annotation-id')
+            const selection = window.getSelection()
+            const selectedText = selection?.toString().trim()
+
+            const menuItems: any[] = []
+
+            // 1. Highlight Context
+            if (annotationId) {
+                const ann = annotations.find((a) => a.id === annotationId)
+                if (ann) {
+                    menuItems.push({
+                        key: 'view-details',
+                        label: '查看详情',
+                        icon: <EyeOutlined />,
+                        onClick: () => onViewDetails?.(ann.id),
+                    })
+                    menuItems.push({
+                        key: 'copy-highlight',
+                        label: '复制',
+                        icon: <CopyOutlined />,
+                        onClick: () => {
+                            void navigator.clipboard.writeText(ann.text)
+                            message.success('已复制')
+                        }
+                    })
+
+
+                    if (!readOnly) {
+                        menuItems.push({
+                            key: 'delete',
+                            label: '删除高亮',
+                            icon: <DeleteOutlined />,
+                            danger: true,
+                            onClick: () => {
+                                const next = annotations.filter((a) => a.id !== annotationId)
+                                onChange(next)
+                            },
+                        })
+                    }
+                }
+            }
+
+            // 2. Selection Context
+            if (selectedText && !selection?.isCollapsed) {
+                // 如果已经有高亮菜单，加个分隔线？目前 ContextMenuItem 还没实现 Divider，直接追加
+                if (menuItems.length > 0) {
+                    // menuItems.push({ type: 'divider' }) 
+                }
+
+                menuItems.push({
+                    key: 'copy',
+                    label: '复制',
+                    icon: <CopyOutlined />,
+                    onClick: () => {
+                        void navigator.clipboard.writeText(selectedText)
+                        message.success('已复制')
+                    }
+                })
+
+            }
+
+            if (menuItems.length > 0) {
+                e.preventDefault()
+                e.stopPropagation()
+                showMenu(menuItems, { x: e.clientX, y: e.clientY })
+            }
+        },
+        [annotations, onChange, readOnly, showMenu, onAnalyze, onReadOriginal, onViewDetails]
+    )
 
     return (
         <>
             <div
                 ref={containerRef}
                 onMouseUp={handleMouseUp}
+                onContextMenu={handleContextMenu}
                 className="relative outline-none"
                 style={{ cursor: readOnly ? 'default' : 'text' }}
             >
                 {renderContent}
             </div>
 
-            {/* Popover */}
-            {selectionState?.rect && virtualEl && (
+            {/* Popover for Creation/Edit (Left Click) */}
+            {selectionState?.rect && ( // Show popover for both new (creation) and existing (edit) selections
+                // Wait, existing logic allowed inline editing of comment.
+                // The requirements didn't say to remove inline editing.
+                // But the user said "Use custom right click menu... add view details... delete..."
+                // The prompt didn't say "remove left click popover".
+                // I should keep the left click popover for "color picking" and "quick comment" on NEW selection.
+                // But for EXISTING highlight?
+                // Left click currently opens the popover to change color/comment/delete.
+                // Right click now offers "Delete", "View Details".
+                // I will keep Left Click -> Edit Popover behavior for now as it wasn't strictly forbidden.
+                // Just ensuring right click works.
                 <Popover
                     open={true}
-                    getPopupContainer={getPopupContainer}
+                    getPopupContainer={() => document.body}
                     destroyTooltipOnHide
                     content={
-                        <div className="flex flex-col gap-2 min-w-[200px]">
+                        <div className={`flex flex-col gap-2 ${selectionState.isNew ? 'w-auto' : 'w-[360px]'}`}>
                             {selectionState.isNew ? (
                                 // 新建模式：选颜色
                                 <div className="flex gap-2 justify-center">
@@ -309,6 +397,8 @@ export function TextAnalysisHighlighter({
                                 </div>
                             ) : (
                                 // 编辑模式：改颜色(可选) + 评论 + 删除
+                                // 既然右键有了删除，这里也可以保留，或者简化。
+                                // 保留原样。
                                 <>
                                     <div className="flex gap-2 justify-center pb-2 border-b border-slate-100">
                                         {COLORS.map((c) => (
@@ -332,7 +422,7 @@ export function TextAnalysisHighlighter({
                                         placeholder="添加评论..."
                                         value={commentDraft}
                                         onChange={(e) => setCommentDraft(e.target.value)}
-                                        autoSize={{ minRows: 2, maxRows: 4 }}
+                                        autoSize={{ minRows: 2, maxRows: 12 }}
                                         className="text-xs"
                                     />
                                     <div className="flex justify-between items-center pt-1">
@@ -354,7 +444,6 @@ export function TextAnalysisHighlighter({
                         </div>
                     }
                 >
-                    {/* 这里的 div 是为了让 Popover 有挂载点，通过 ref 传递虚拟位置 */}
                     <div
                         style={{
                             position: 'fixed',

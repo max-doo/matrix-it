@@ -5,9 +5,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react'
 import type { BadgeProps } from 'antd'
-import { Badge, Dropdown, Tag, Typography } from 'antd'
+import { Badge, Dropdown, Tag, Typography, Button } from 'antd'
+import { EyeOutlined, ReadOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { ProColumns } from '@ant-design/pro-components'
 import { ProTable } from '@ant-design/pro-components'
+import { useContextMenu } from './GlobalContextMenu'
 
 import type { LiteratureItem, ProcessingStatus } from '../../types'
 import { formatAuthor, formatIF, getJournalTags, getLiteratureTypeMeta } from '../utils/ui-formatters'
@@ -41,6 +43,7 @@ export type LiteratureTableProps = {
   onSortedDataChange?: (rows: LiteratureItem[]) => void
   /** 当前激活的条目 key，用于高亮显示和自动滚动 */
   activeItemKey?: string | null
+  onReadOriginal?: (itemKey: string) => void
 }
 
 const TITLE_KEY = 'title'
@@ -238,7 +241,9 @@ export function LiteratureTable({
   onPageRowsChange,
   onSortedDataChange,
   activeItemKey,
+  onReadOriginal,
 }: LiteratureTableProps) {
+  const { showMenu } = useContextMenu()
   const showStatus = true
   const fixedWidthCols = useMemo(() => new Set(['author', 'year', 'type', 'bib_type', 'impact_factor', 'rating', 'progress']), [])
   const [currentPage, setCurrentPage] = useState(1)
@@ -726,6 +731,73 @@ export function LiteratureTable({
     return visibleKeys.reduce((acc, k) => acc + (columnWidthsPxRef.current[k] ?? getMinWidth(k)), 0)
   }, [visibleKeys, layoutTick])
 
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      // 阻止默认菜单
+      e.preventDefault()
+      e.stopPropagation()
+
+      const target = e.target as HTMLElement
+      // 尝试寻找最近的行或 Item Key
+      // ProTable 的行通常有 data-row-key。我们自定义的 Title 按钮有 data-item-key。
+      const row = target.closest('tr[data-row-key]') as HTMLElement | null
+      const itemBtn = target.closest('[data-item-key]') as HTMLElement | null
+      const itemKey = itemBtn?.getAttribute('data-item-key') || row?.getAttribute('data-row-key')
+
+      const menuItems: any[] = []
+
+      // 1. Item Context
+      if (itemKey) {
+        menuItems.push({
+          key: 'view-details',
+          label: '查看详情',
+          icon: <EyeOutlined />,
+          onClick: () => onOpenDetail(itemKey),
+        })
+        menuItems.push({
+          key: 'read-original',
+          label: '阅读原文',
+          icon: <ReadOutlined />,
+          onClick: () => onReadOriginal?.(itemKey),
+          disabled: !onReadOriginal, // 如果没有提供处理函数则禁用
+        })
+
+      } else {
+        // 2. Background Context (Refresh)
+        // 只有当点击的不是具体条目时才显示刷新，或者条目也显示刷新？通常背景显示刷新。
+        // 用户需求：“未选中文字时显示，点击任意位置” -> 可能是指点击条目也显示刷新，或者只在背景。
+        // “鼠标悬浮在表格标题上、高亮文字上时，点击右键可查看详情...未选中文字时显示（刷新）”
+        // 这里的“未选中文字”可能是指没有 Text Selection。
+        // 我们已经在 TextAnalysisHighlighter 里处理了 Selection。
+        // 这里主要作为 Table 的通用菜单。
+        // 策略：如果是 Item，显示 Item 功能 + 刷新；如果是背景，只显示刷新。
+        // 但通常上下文菜单越短越好。Item 上不要刷新。
+      }
+
+      // Refresh (Always available or only background? User said "click anywhere" implies global for table area, but context sensitive)
+      // "点击任意位置" -> 意味着 Item 上也应该有？不，"未选中文字时显示" refers to the Refresh function logic, likely "If no text selected, show menu".
+      // 用户说："当鼠标悬浮在表格标题上...点击右键可查看详情...目前只有在选中文字的时候才有右键菜单...要把刷新功能加上（未选中文字时显示，点击任意位置）"
+      // 这句话有点歧义。可能是说：现在只有 Highligher 选中文本才有菜单。他希望不选中文本也能唤起菜单（详情/原文/刷新）。
+      // 那么我将在 Item 上显示 详情/原文/刷新（分割线），在背景显示 刷新。
+
+      if (menuItems.length > 0) {
+        // Add separator if we were to act strict, but for now just append
+      }
+
+      menuItems.push({
+        key: 'refresh',
+        label: '刷新列表',
+        icon: <ReloadOutlined />,
+        onClick: () => onRefresh(),
+      })
+
+      if (menuItems.length > 0) {
+        showMenu(menuItems, { x: e.clientX, y: e.clientY })
+      }
+    },
+    [onOpenDetail, onReadOriginal, onRefresh, showMenu]
+  )
+
   /**
    * 列定义生成
    * 动态生成 ProTable 的 columns 配置，包含：
@@ -1008,6 +1080,7 @@ export function LiteratureTable({
                     fieldKey={colKey}
                     annotations={annotations}
                     onChange={() => { }}
+                    onViewDetails={() => onOpenDetail(record.item_key)}
                     readOnly={true}
                   />
                 </div>
@@ -1100,7 +1173,7 @@ export function LiteratureTable({
   )
 
   return (
-    <div ref={containerRef} className="h-full min-h-0 flex flex-col">
+    <div ref={containerRef} className="h-full min-h-0 flex flex-col" onContextMenu={handleContextMenu}>
       <ProTable<LiteratureItem>
         rowKey="item_key"
         dataSource={sortedData}

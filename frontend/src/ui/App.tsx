@@ -11,7 +11,7 @@ import {
 import zhCN from 'antd/locale/zh_CN'
 
 import type { AnalysisReport, LiteratureItem } from '../types'
-import { reconcileFeishu as reconcileFeishuRpc, syncFeishu as syncFeishuRpc } from '../lib/backend'
+import { reconcileFeishu as reconcileFeishuRpc, syncFeishu as syncFeishuRpc, resolvePdfPath, openPdfInBrowser, openPath, openExternal } from '../lib/backend'
 import { AppSidebar } from './components/AppSidebar'
 import { LiteratureTable, type LiteratureTableView } from './components/LiteratureTable'
 import { TitleBar } from './components/TitleBar'
@@ -32,6 +32,7 @@ import { useLibraryState, useZoteroWatch } from './hooks/useLibraryState'
 import { STORAGE_KEYS, deleteKey, readString, writeString } from './lib/storage'
 import { collectCollectionKeys } from './lib/collectionUtils'
 import { createAnalysisResultUi } from './components/analysisResultUi'
+import { ContextMenuProvider } from './components/GlobalContextMenu'
 
 const { Sider, Content } = Layout
 
@@ -471,7 +472,7 @@ export default function App() {
     }
     return findName(library.collections) || '文献'
   }, [activeCollectionKey, library.collections])
-  const { activeItem, canPrevDetail, canNextDetail, goPrevDetail, goNextDetail } = useDetailNavigation(
+  const { activeItem, canPrevDetail: canPrev, canNextDetail: canNext, goPrevDetail, goNextDetail } = useDetailNavigation(
     library.items,
     filteredItems,
     tableSortedKeys,
@@ -744,6 +745,82 @@ export default function App() {
     return () => window.clearTimeout(t)
   }, [feishuGlobalReconcileDue, feishuReconciling, feishuSyncing, handleAutoReconcileFeishuRequest, mode, refreshingLibrary])
 
+  const handleReadOriginal = useCallback(
+    async (itemKey: string) => {
+      const item = library?.items.find((x) => x.item_key === itemKey)
+      if (!item) return
+
+      const rawPdfPath = String(item.pdf_path ?? '').trim()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const it = item as any
+      const attachments = Array.isArray(it.attachments) ? it.attachments : []
+      const hasPdfAttachment = rawPdfPath || attachments.length > 0
+
+      const doi = String(it.doi ?? '')
+      const url = String(it.url ?? '')
+      const originalHref = url.trim() || (doi.trim() ? `https://doi.org/${doi.trim()}` : '')
+
+      if (hasPdfAttachment) {
+        try {
+          const pdfPath = await resolvePdfPath(itemKey)
+          if (pdfPath) {
+            if (pdfOpenMode === 'browser') {
+              try {
+                const opened = await openPdfInBrowser(pdfPath)
+                if (opened.opened) return
+              } catch (e) {
+                // ignore, try local
+              }
+              try {
+                const opened = await openPath(pdfPath)
+                if (opened.opened) return
+              } catch (e) {
+                message.error(e instanceof Error ? e.message : String(e))
+                return
+              }
+              message.error('无法打开 PDF（系统未返回成功）。')
+              return
+            }
+
+            // Local mode
+            try {
+              const opened = await openPath(pdfPath)
+              if (opened.opened) return
+            } catch (e) {
+              // ignore, try browser fallback? No, existing logic is explicit.
+            }
+            try {
+              const opened = await openPdfInBrowser(pdfPath)
+              if (opened.opened) return
+            } catch (e) {
+              message.error(e instanceof Error ? e.message : String(e))
+              return
+            }
+            message.error('无法打开 PDF（系统未返回成功）。')
+            return
+          }
+          message.error('没有解析到可用的 PDF 路径。')
+          return
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : String(e))
+          return
+        }
+      }
+
+      if (originalHref) {
+        try {
+          await openExternal(originalHref)
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : String(e))
+        }
+        return
+      }
+
+      message.info('没有附件或原文链接')
+    },
+    [library?.items, pdfOpenMode]
+  )
+
   const segmentedOptions: { label: string; value: string }[] = [
     { label: 'Zotero库', value: 'zotero' },
     { label: '文献矩阵', value: 'matrix' },
@@ -776,202 +853,203 @@ export default function App() {
     >
       <AntApp>
         <ConfirmController apiRef={confirmApiRef} />
-        <div className="flex h-screen w-screen overflow-hidden bg-[var(--app-bg)]">
-          <TitleBar />
-          <Layout className="w-full h-full bg-transparent">
-            <Sider width={280} theme="light" className="border-r border-slate-200 !bg-[var(--app-bg)]">
-              {mode === 'workbench' ? (
-                <AppSidebar
-                  collections={library.collections}
-                  items={library.items}
-                  activeKey={activeCollectionKey}
-                  onSelect={handleSelectCollection}
-                  zoteroStatus={zoteroStatus}
-                  refreshState={{
-                    refreshing: refreshingLibrary,
-                    error: refreshError,
-                    lastUpdatedAt: lastRefreshAt,
+        <ContextMenuProvider>
+          <div className="flex h-screen w-screen overflow-hidden bg-[var(--app-bg)]">
+            <TitleBar />
+            <Layout className="w-full h-full bg-transparent">
+              <Sider width={280} theme="light" className="border-r border-slate-200 !bg-[var(--app-bg)]">
+                {mode === 'workbench' ? (
+                  <AppSidebar
+                    collections={library.collections}
+                    items={library.items}
+                    activeKey={activeCollectionKey}
+                    onSelect={handleSelectCollection}
+                    zoteroStatus={zoteroStatus}
+                    refreshState={{
+                      refreshing: refreshingLibrary,
+                      error: refreshError,
+                      lastUpdatedAt: lastRefreshAt,
+                    }}
+                    onRefresh={handleRefresh}
+                    onSettings={() => {
+                      setMode('settings')
+                      setSettingsSection('zotero')
+                    }}
+                  />
+                ) : (
+                  <SettingsSidebar
+                    activeKey={settingsSection}
+                    onSelect={(k) => {
+                      setSettingsSection(k)
+                      settingsScrollApiRef.current?.scrollToSection(k)
+                    }}
+                    onGoHome={() => setMode('workbench')}
+                    zoteroStatus={zoteroStatus}
+                  />
+                )}
+              </Sider>
+              <Content className="flex flex-col overflow-hidden min-h-0 relative p-4 pt-10 gap-4">
+                <div
+                  className="absolute top-0 left-0 right-0 h-10"
+                  onMouseDown={(e) => {
+                    if (e.buttons !== 1) return
+                    void appWindowRef.current?.startDragging()
                   }}
-                  onRefresh={handleRefresh}
-                  onSettings={() => {
-                    setMode('settings')
-                    setSettingsSection('zotero')
+                  onDoubleClick={() => {
+                    void appWindowRef.current?.toggleMaximize()
                   }}
                 />
-              ) : (
-                <SettingsSidebar
-                  activeKey={settingsSection}
-                  onSelect={(k) => {
-                    setSettingsSection(k)
-                    settingsScrollApiRef.current?.scrollToSection(k)
-                  }}
-                  onGoHome={() => setMode('workbench')}
-                  zoteroStatus={zoteroStatus}
-                />
-              )}
-            </Sider>
-            <Content className="flex flex-col overflow-hidden min-h-0 relative p-4 pt-10 gap-4">
-              <div
-                className="absolute top-0 left-0 right-0 h-10"
-                onMouseDown={(e) => {
-                  if (e.buttons !== 1) return
-                  void appWindowRef.current?.startDragging()
-                }}
-                onDoubleClick={() => {
-                  void appWindowRef.current?.toggleMaximize()
-                }}
-              />
-              {mode === 'workbench' ? (
-                <div className="flex-1 min-h-0 bg-white rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 overflow-hidden flex flex-col relative">
-                  <div data-tauri-drag-region="false" className="flex justify-between items-center shrink-0 px-4 py-3 border-b border-slate-100">
-                    <div data-tauri-drag-region="false">
-                      <Segmented
-                        value={activeView}
-                        onChange={(value) => {
-                          const next = value as string
-                          setActiveView(next)
-                          if (next === 'matrix') {
-                            zoteroFilterModeRef.current = filterMode
-                            setFilterMode('processed')
-                            return
-                          }
-                          setFilterMode(zoteroFilterModeRef.current)
-                        }}
-                        options={segmentedOptions}
-                        className="matrixit-segmented"
-                      />
+                {mode === 'workbench' ? (
+                  <div className="flex-1 min-h-0 bg-white rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 overflow-hidden flex flex-col relative">
+                    <div data-tauri-drag-region="false" className="flex justify-between items-center shrink-0 px-4 py-3 border-b border-slate-100">
+                      <div data-tauri-drag-region="false">
+                        <Segmented
+                          value={activeView}
+                          onChange={(value) => {
+                            const next = value as string
+                            setActiveView(next)
+                            if (next === 'matrix') {
+                              zoteroFilterModeRef.current = filterMode
+                              setFilterMode('processed')
+                              return
+                            }
+                            setFilterMode(zoteroFilterModeRef.current)
+                          }}
+                          options={segmentedOptions}
+                          className="matrixit-segmented"
+                        />
+                      </div>
+
+                      <div data-tauri-drag-region="false">
+                        <WorkbenchToolbar
+                          selectedCount={selectedRowKeys.length}
+                          activeView={activeView as LiteratureTableView}
+                          normalizedSearchQuery={normalizedSearchQuery}
+                          searchQuery={searchQuery}
+                          setSearchQuery={setSearchQuery}
+                          searchPopoverOpen={searchPopoverOpen}
+                          setSearchPopoverOpen={setSearchPopoverOpen}
+                          searchInputElRef={searchInputElRef}
+                          activeSearchButtonStyle={activeSearchButtonStyle}
+                          filterMode={filterMode}
+                          setFilterMode={setFilterMode}
+                          fieldFilter={fieldFilter}
+                          setFieldFilter={setFieldFilter}
+                          filterPopoverOpen={filterPopoverOpen}
+                          setFilterPopoverOpen={setFilterPopoverOpen}
+                          themePrimaryColor={themeToken.colorPrimary}
+                          yearOptions={filterYearOptions}
+                          typeOptions={filterTypeOptions}
+                          tagOptions={filterTagOptions}
+                          keywordOptions={filterKeywordOptions}
+                          bibTypeOptions={filterBibTypeOptions}
+                          columnsPopoverOpen={columnsPopoverOpen}
+                          setColumnsPopoverOpen={setColumnsPopoverOpen}
+                          metaPanel={metaColumnPanel}
+                          analysisPanel={analysisColumnPanel}
+                          metaFieldDefs={metaFieldDefs}
+                          analysisFieldDefs={analysisFieldDefs}
+                          matrixAnalysisSettingsOrder={matrixAnalysisSettingsOrder}
+                          defaultMetaOrder={defaultMetaOrder}
+                          getFieldName={getFieldName}
+                          applyMetaPanelChange={applyMetaPanelChange}
+                          applyAnalysisPanelChange={applyAnalysisPanelChange}
+                          analysisInProgress={analysisInProgress}
+                          stoppingAnalysis={stoppingAnalysis}
+                          onAnalyzeRequest={handleAnalysisRequest}
+                          onStopRequest={handleStopAnalysisRequest}
+                          llmConfigured={llmConfigured}
+                          deletingExtracted={deletingExtracted}
+                          onDeleteRequest={handleDeleteRequest}
+                          feishuSyncing={feishuSyncing}
+                          feishuReconciling={feishuReconciling}
+                          feishuPendingCount={feishuPendingCount}
+                          feishuLastError={feishuSyncLastError}
+                          feishuSyncEnabled={feishuSyncEnabled}
+                          feishuReconcileDue={feishuReconcileDue}
+                          feishuLastReconcileAt={feishuLastReconcileAt}
+                          onSyncRequest={handleSyncFeishuRequest}
+                          onReconcileRequest={handleReconcileFeishuRequest}
+                          feishuApiConfigured={feishuApiConfigured}
+                          filteredItemsCount={filteredItems.length}
+                        />
+                      </div>
                     </div>
 
-                    <div data-tauri-drag-region="false">
-                      <WorkbenchToolbar
-                        selectedCount={selectedRowKeys.length}
-                        activeView={activeView as LiteratureTableView}
-                        normalizedSearchQuery={normalizedSearchQuery}
-                        searchQuery={searchQuery}
-                        setSearchQuery={setSearchQuery}
-                        searchPopoverOpen={searchPopoverOpen}
-                        setSearchPopoverOpen={setSearchPopoverOpen}
-                        searchInputElRef={searchInputElRef}
-                        activeSearchButtonStyle={activeSearchButtonStyle}
-                        filterMode={filterMode}
-                        setFilterMode={setFilterMode}
-                        fieldFilter={fieldFilter}
-                        setFieldFilter={setFieldFilter}
-                        filterPopoverOpen={filterPopoverOpen}
-                        setFilterPopoverOpen={setFilterPopoverOpen}
-                        themePrimaryColor={themeToken.colorPrimary}
-                        yearOptions={filterYearOptions}
-                        typeOptions={filterTypeOptions}
-                        tagOptions={filterTagOptions}
-                        keywordOptions={filterKeywordOptions}
-                        bibTypeOptions={filterBibTypeOptions}
-                        columnsPopoverOpen={columnsPopoverOpen}
-                        setColumnsPopoverOpen={setColumnsPopoverOpen}
-                        metaPanel={metaColumnPanel}
-                        analysisPanel={analysisColumnPanel}
-                        metaFieldDefs={metaFieldDefs}
-                        analysisFieldDefs={analysisFieldDefs}
-                        matrixAnalysisSettingsOrder={matrixAnalysisSettingsOrder}
-                        defaultMetaOrder={defaultMetaOrder}
-                        getFieldName={getFieldName}
-                        applyMetaPanelChange={applyMetaPanelChange}
-                        applyAnalysisPanelChange={applyAnalysisPanelChange}
-                        analysisInProgress={analysisInProgress}
-                        stoppingAnalysis={stoppingAnalysis}
-                        onAnalyzeRequest={handleAnalysisRequest}
-                        onStopRequest={handleStopAnalysisRequest}
-                        llmConfigured={llmConfigured}
-                        deletingExtracted={deletingExtracted}
-                        onDeleteRequest={handleDeleteRequest}
-                        feishuSyncing={feishuSyncing}
-                        feishuReconciling={feishuReconciling}
-                        feishuPendingCount={feishuPendingCount}
-                        feishuLastError={feishuSyncLastError}
-                        feishuSyncEnabled={feishuSyncEnabled}
-                        feishuReconcileDue={feishuReconcileDue}
-                        feishuLastReconcileAt={feishuLastReconcileAt}
-                        onSyncRequest={handleSyncFeishuRequest}
-                        onReconcileRequest={handleReconcileFeishuRequest}
-                        feishuApiConfigured={feishuApiConfigured}
-                        filteredItemsCount={filteredItems.length}
+                    <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
+                      <LiteratureTable
+                        data={filteredItems}
+                        view={activeView as LiteratureTableView}
+                        metaColumns={tableMetaColumns}
+                        analysisColumns={tableAnalysisColumns}
+                        highlightQuery={normalizedSearchQuery}
+                        selectedRowKeys={selectedRowKeys}
+                        onSelectedRowKeysChange={setSelectedRowKeys}
+                        onOpenDetail={(key) => void requestOpenDetail(key)}
+                        onRefresh={handleRefresh}
+                        onItemPatch={saveMatrixPatch}
+                        activeItemKey={activeItemKey}
+                        onReadOriginal={handleReadOriginal}
                       />
+                      {/* 导出按钮组 - 定位到分页器区域右侧 */}
+                      <div className="absolute bottom-2 right-4 z-10">
+                        <TableExportButtons
+                          selectedKeys={selectedRowKeys.map(String)}
+                          collectionKeys={collectionItemKeys}
+                          collectionName={activeCollectionName}
+                          feishuBitableUrl={feishuBitableUrl}
+                          allItems={library?.items || []}
+                        />
+                      </div>
                     </div>
                   </div>
+                ) : (
+                  <SettingsPage
+                    configForm={configForm}
+                    fieldsForm={fieldsForm}
+                    loading={settingsLoading}
+                    saving={settingsSaving}
+                    activeSection={settingsSection}
+                    scrollApiRef={settingsScrollApiRef}
+                    onActiveSectionChange={setSettingsSection}
+                    onGoHome={() => setMode('workbench')}
+                    onReload={loadSettings}
+                    onAutoSave={scheduleAutoSaveSettings}
+                    metaFieldDefs={metaFieldDefs}
+                    attachmentFieldDefs={attachmentFieldDefs}
+                  />
+                )}
+              </Content>
+            </Layout>
 
-                  <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
-                    <LiteratureTable
-                      data={filteredItems}
-                      view={activeView as LiteratureTableView}
-                      metaColumns={tableMetaColumns}
-                      analysisColumns={tableAnalysisColumns}
-                      highlightQuery={normalizedSearchQuery}
-                      selectedRowKeys={selectedRowKeys}
-                      onSelectedRowKeysChange={setSelectedRowKeys}
-                      onOpenDetail={(key) => void requestOpenDetail(key)}
-                      onRefresh={handleRefresh}
-                      onItemPatch={saveMatrixPatch}
-                      onPageRowsChange={setCurrentPageRows}
-                      onSortedDataChange={handleTableSortedDataChange}
-                      activeItemKey={activeItemKey}
-                    />
-                    {/* 导出按钮组 - 定位到分页器区域右侧 */}
-                    <div className="absolute bottom-2 right-4 z-10">
-                      <TableExportButtons
-                        selectedKeys={selectedRowKeys.map(String)}
-                        collectionKeys={collectionItemKeys}
-                        collectionName={activeCollectionName}
-                        feishuBitableUrl={feishuBitableUrl}
-                        allItems={library?.items || []}
-                      />
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <SettingsPage
-                  configForm={configForm}
-                  fieldsForm={fieldsForm}
-                  loading={settingsLoading}
-                  saving={settingsSaving}
-                  activeSection={settingsSection}
-                  scrollApiRef={settingsScrollApiRef}
-                  onActiveSectionChange={setSettingsSection}
-                  onGoHome={() => setMode('workbench')}
-                  onReload={loadSettings}
-                  onAutoSave={scheduleAutoSaveSettings}
-                  metaFieldDefs={metaFieldDefs}
-                  attachmentFieldDefs={attachmentFieldDefs}
+            {mode === 'workbench' ? (
+              <>
+                <LiteratureDetailDrawer
+                  item={activeItem}
+                  mode={detailMode}
+                  pdfOpenMode={pdfOpenMode}
+                  analysisFieldDefs={analysisFieldDefs}
+                  analysisOrder={matrixAnalysisOrder}
+                  onSwitchMode={setDetailMode}
+                  onLeaveGuardChange={(g) => setDetailLeaveGuard(() => g)}
+                  citationState={activeItemKey ? detailCitationState : undefined}
+                  onClose={() => setActiveItemKey(null)}
+                  onPrev={goPrevDetail}
+                  onNext={goNextDetail}
+                  canPrev={canPrev}
+                  canNext={canNext}
+                  onSave={
+                    detailMode === 'matrix'
+                      ? saveMatrixPatch
+                      : undefined
+                  }
+                  onItemPatch={saveMatrixPatch}
                 />
-              )}
-            </Content>
-          </Layout>
-
-          {mode === 'workbench' ? (
-            <>
-              <LiteratureDetailDrawer
-                item={activeItem}
-                mode={detailMode}
-                pdfOpenMode={pdfOpenMode}
-                analysisFieldDefs={analysisFieldDefs}
-                analysisOrder={matrixAnalysisOrder}
-                onSwitchMode={setDetailMode}
-                onLeaveGuardChange={(g) => setDetailLeaveGuard(() => g)}
-                citationState={activeItemKey ? detailCitationState : undefined}
-                onClose={() => setActiveItemKey(null)}
-                onPrev={goPrevDetail}
-                onNext={goNextDetail}
-                canPrev={canPrevDetail}
-                canNext={canNextDetail}
-                onSave={
-                  detailMode === 'matrix'
-                    ? saveMatrixPatch
-                    : undefined
-                }
-                onItemPatch={saveMatrixPatch}
-              />
-            </>
-          ) : null}
-        </div>
+              </>
+            ) : null}
+          </div>
+        </ContextMenuProvider>
       </AntApp>
-    </ConfigProvider>
+    </ConfigProvider >
   )
 }
