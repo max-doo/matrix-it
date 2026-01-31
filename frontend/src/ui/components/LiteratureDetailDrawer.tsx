@@ -1035,8 +1035,6 @@ export function LiteratureDetailDrawer({
                       <Typography.Link
                         className="break-all"
                         href={`https://doi.org/${doi}`}
-                        target="_blank"
-                        rel="noreferrer"
                         onClick={(e) => {
                           e.preventDefault()
                           openExternal(`https://doi.org/${doi}`).catch(() => { })
@@ -1053,8 +1051,6 @@ export function LiteratureDetailDrawer({
                       <Typography.Link
                         className="break-all"
                         href={url}
-                        target="_blank"
-                        rel="noreferrer"
                         onClick={(e) => {
                           e.preventDefault()
                           openExternal(url).catch(() => { })

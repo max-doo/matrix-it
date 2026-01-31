@@ -484,7 +484,14 @@ export default function App() {
     const keys = rows
       .map((it) => it.item_key)
       .filter((k): k is string => typeof k === 'string' && k.trim().length > 0)
-    setTableSortedKeys(keys)
+
+    setTableSortedKeys(prev => {
+      if (prev.length !== keys.length) return keys
+      for (let i = 0; i < prev.length; i++) {
+        if (prev[i] !== keys[i]) return keys
+      }
+      return prev
+    })
   }, [])
 
   const selectedItemStats = useMemo(() => {
@@ -990,6 +997,7 @@ export default function App() {
                         onItemPatch={saveMatrixPatch}
                         activeItemKey={activeItemKey}
                         onReadOriginal={handleReadOriginal}
+                        onSortedDataChange={handleTableSortedDataChange}
                       />
                       {/* 导出按钮组 - 定位到分页器区域右侧 */}
                       <div className="absolute bottom-2 right-4 z-10">
