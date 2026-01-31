@@ -2,6 +2,7 @@
 import { DeleteOutlined, HighlightOutlined, MessageOutlined, CopyOutlined, EyeOutlined, FileTextOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { Button, Input, Popover, Space, theme, Tooltip, message } from 'antd'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import type { Annotation } from '../../types'
 import { useContextMenu } from './GlobalContextMenu'
 
@@ -20,7 +21,7 @@ export type TextAnalysisHighlighterProps = {
 type SelectionState = {
     range: Range | null
     rect: DOMRect | null
-    isNew: boolean // true for new selection, false for clicking existing highlight
+    isNew: boolean // 新建选区为 true，点击现有高亮为 false
     activeAnnotationId?: string
 }
 
@@ -53,7 +54,7 @@ export function TextAnalysisHighlighter({
     const renderContent = useMemo(() => {
         if (!text) return null
 
-        // 过滤掉无效或文本不匹配的高亮 (Strict Validation)
+        // 过滤文本不匹配的高亮
         const validAnnotations = annotations
             .filter((a) => {
                 const slice = text.slice(a.start, a.end)
@@ -103,8 +104,17 @@ export function TextAnalysisHighlighter({
                     <Tooltip
                         key={`tooltip-${ann.id}`}
                         title={
-                            <div className="whitespace-pre-wrap break-words">
-                                {ann.comment}
+                            <div className="whitespace-normal break-words markdown-tooltip max-h-[400px] overflow-y-auto custom-scrollbar">
+                                <ReactMarkdown
+                                    components={{
+                                        p: (props: any) => <div className="mb-1 last:mb-0">{props.children}</div>,
+                                        ul: (props: any) => <ul className="pl-4 list-disc mb-1 last:mb-0">{props.children}</ul>,
+                                        ol: (props: any) => <ol className="pl-4 list-decimal mb-1 last:mb-0">{props.children}</ol>,
+                                        a: (props: any) => <a href={props.href} target="_blank" rel="noopener noreferrer" className="text-blue-300 underline hover:text-blue-200">{props.children}</a>
+                                    }}
+                                >
+                                    {ann.comment}
+                                </ReactMarkdown>
                             </div>
                         }
                         color="#1e293b"
@@ -149,16 +159,8 @@ export function TextAnalysisHighlighter({
         // 确保选区在我们的容器内
         if (!containerRef.current?.contains(range.commonAncestorContainer)) return
 
-        // 计算相对于 text 的 start/end 索引
-        // 这是一个难点，因为 DOM 结构被高亮打断了。
-        // 我们采用比较笨但可靠的方法：重新构建纯文本位置。
-        // 但是，利用 Range offset 在混合 DOM 中很复杂。
-        // 简便方案：禁止跨越高亮选区？或者只允许选中纯文本节点？
-        // 为了 V1 简单，我们利用 selection 的 anchorNode 和 focusNode 来计算。
-
-        // 更稳健的方法：
-        // 获取选区相对于 container 的纯文本偏移量。
-        // 由于我们渲染时保持了文本顺序，可以用 TreeWalker 或 Range 扩展来计算。
+        // 简便方案：使用 selection 的 anchorNode 和 focusNode 来计算
+        // 规避复杂的跨节点 Range 计算
 
         const preSelectionRange = range.cloneRange()
         preSelectionRange.selectNodeContents(containerRef.current)
@@ -166,14 +168,12 @@ export function TextAnalysisHighlighter({
         const start = preSelectionRange.toString().length
         const end = start + textContent.length
 
-        // 检查是否与现有高亮重叠 (Overlap Check)
+        // 检查重叠
         const isOverlap = annotations.some((a) => {
-            // 简单的区间重叠判断: start < a.end && end > a.start
-            return start < a.end && end > a.start && text.slice(a.start, a.end) === a.text // 且该高亮有效
+            return start < a.end && end > a.start && text.slice(a.start, a.end) === a.text
         })
 
         if (isOverlap) {
-            // V1 不支持重叠高亮，但不清除选区，允许用户复制文本
             return
         }
 
@@ -255,19 +255,12 @@ export function TextAnalysisHighlighter({
     useEffect(() => {
         const onClickGlobal = (e: MouseEvent) => {
             if (!selectionState) return
-            // 如果点击在 Popover 内部，不关闭。Antd Popover 处理了这个吗？通常 overlay 也是 body 的子元素。
-            // 最简单的方式是依靠 Popover 的 trigger="click" or open/onOpenChange？
-            // 但我们需要手动控制位置。
-            // 实际上，我们不需要全局监听，点击 document 任何非 popover 区域应该关闭。
-            // 这里简便处理：在 container 的 onMouseDown (Capture) 或者利用 mask?
-            // Antd Popover 没有 mask。
             const target = e.target as HTMLElement
 
-            // Klik Popover 内部，不关闭
+            // 点击 Popover 内部不关闭
             if (target.closest('.ant-popover')) return
 
-            // 点击容器内：如果是为了开始新的选择或取消选择，我们应该关闭当前的 Popover
-            // 但不应调用 removeAllRanges，否则会打断用户的拖拽选择操作或光标定位
+            // 点击容器内：重置选区
             if (containerRef.current?.contains(target)) {
                 setSelectionState(null)
                 setCommentDraft('')
@@ -290,7 +283,7 @@ export function TextAnalysisHighlighter({
 
             const menuItems: any[] = []
 
-            // 1. Highlight Context
+            // 1. 高亮上下文
             if (annotationId) {
                 const ann = annotations.find((a) => a.id === annotationId)
                 if (ann) {
@@ -329,11 +322,10 @@ export function TextAnalysisHighlighter({
                 }
             }
 
-            // 2. Selection Context
+            // 2. 选区上下文
             if (selectedText && !selection?.isCollapsed) {
-                // 如果已经有高亮菜单，加个分隔线？目前 ContextMenuItem 还没实现 Divider，直接追加
                 if (menuItems.length > 0) {
-                    // menuItems.push({ type: 'divider' }) 
+                    // 可选：添加分割线
                 }
 
                 menuItems.push({
@@ -369,24 +361,14 @@ export function TextAnalysisHighlighter({
                 {renderContent}
             </div>
 
-            {/* Popover for Creation/Edit (Left Click) */}
-            {selectionState?.rect && ( // Show popover for both new (creation) and existing (edit) selections
-                // Wait, existing logic allowed inline editing of comment.
-                // The requirements didn't say to remove inline editing.
-                // But the user said "Use custom right click menu... add view details... delete..."
-                // The prompt didn't say "remove left click popover".
-                // I should keep the left click popover for "color picking" and "quick comment" on NEW selection.
-                // But for EXISTING highlight?
-                // Left click currently opens the popover to change color/comment/delete.
-                // Right click now offers "Delete", "View Details".
-                // I will keep Left Click -> Edit Popover behavior for now as it wasn't strictly forbidden.
-                // Just ensuring right click works.
+            {/* 创建/编辑 Popover */}
+            {selectionState?.rect && (
                 <Popover
                     open={true}
                     getPopupContainer={() => document.body}
                     destroyTooltipOnHide
                     content={
-                        <div className={`flex flex-col gap-2 ${selectionState.isNew ? 'w-auto' : 'w-[360px]'}`}>
+                        <div className={`flex flex-col gap-2 ${selectionState.isNew ? 'w-auto' : 'w-[420px]'}`}>
                             {selectionState.isNew ? (
                                 // 新建模式：选颜色
                                 <div className="flex gap-2 justify-center">
@@ -401,9 +383,7 @@ export function TextAnalysisHighlighter({
                                     ))}
                                 </div>
                             ) : (
-                                // 编辑模式：改颜色(可选) + 评论 + 删除
-                                // 既然右键有了删除，这里也可以保留，或者简化。
-                                // 保留原样。
+                                // 编辑模式：改颜色 + 评论 + 删除
                                 <>
                                     <div className="flex gap-2 justify-center pb-2 border-b border-slate-100">
                                         {COLORS.map((c) => (
@@ -427,7 +407,7 @@ export function TextAnalysisHighlighter({
                                         placeholder="添加评论..."
                                         value={commentDraft}
                                         onChange={(e) => setCommentDraft(e.target.value)}
-                                        autoSize={{ minRows: 2, maxRows: 12 }}
+                                        autoSize={{ minRows: 2, maxRows: 24 }}
                                         className="text-xs"
                                     />
                                     <div className="flex justify-between items-center pt-1">

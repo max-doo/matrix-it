@@ -624,7 +624,7 @@ export function LiteratureDetailDrawer({
             </div>
           </div>
 
-          <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-auto flex flex-col gap-4 pt-3">
+          <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-auto flex flex-col gap-4 pt-3 custom-scrollbar">
             {mode === 'matrix' ? (
               <div className="flex flex-col gap-5">
                 <div className="flex flex-col gap-2">
