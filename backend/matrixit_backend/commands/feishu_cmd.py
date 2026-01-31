@@ -65,6 +65,16 @@ def reconcile_feishu(
     
     config = load_config(config_path)
     fc = feishu.get_feishu_config(config)
+    
+    # Resolve Wiki Token to Real Token for accurate comparison
+    if fc.get("app_id") and fc.get("app_secret"):
+        try:
+            if fc.get("_is_wiki") or (fc.get("bitable_url") and "/wiki/" in fc.get("bitable_url", "")):
+                 client = feishu.create_client(fc["app_id"], fc["app_secret"])
+                 fc = feishu.resolve_feishu_config_credentials(client, fc)
+        except Exception:
+            pass
+
     cur_app_token = str(fc.get("app_token") or "").strip()
     cur_table_id = str(fc.get("table_id") or "").strip()
     cur_base_sig = f"{cur_app_token}:{cur_table_id}" if cur_app_token and cur_table_id else ""
@@ -114,7 +124,7 @@ def reconcile_feishu(
     if not record_ids:
         return {"checked": 0, "missing_remote": 0, "marked_unsynced": int(reset_mismatch), "forbidden": 0}
 
-    res = feishu.batch_get_records(config, record_ids)
+    res = feishu.batch_get_records(config, record_ids, app_token=cur_app_token)
     absent = set([str(x) for x in res.get("absent", []) if str(x).strip()])
     forbidden = set([str(x) for x in res.get("forbidden", []) if str(x).strip()])
 
@@ -169,6 +179,19 @@ def delete_extracted_data(
 
     fields_def = {}
     config = load_config(config_path)
+    fc = feishu.get_feishu_config(config)
+
+    # Resolve Wiki Token to Real Token (similar to reconcile_feishu)
+    if fc.get("app_id") and fc.get("app_secret"):
+        try:
+            if fc.get("_is_wiki") or (fc.get("bitable_url") and "/wiki/" in fc.get("bitable_url", "")):
+                 client = feishu.create_client(fc["app_id"], fc["app_secret"])
+                 fc = feishu.resolve_feishu_config_credentials(client, fc)
+        except Exception:
+            pass
+    
+    cur_app_token = str(fc.get("app_token") or "").strip()
+
     if isinstance(config.get("fields"), dict):
         fields_def = config.get("fields", {})
     else:
@@ -209,7 +232,7 @@ def delete_extracted_data(
     feishu_stats = {"deleted": 0, "skipped": 0, "failed": 0, "results": {}}
     if record_ids:
         try:
-            feishu_stats = feishu.delete_records(config, record_ids)
+            feishu_stats = feishu.delete_records(config, record_ids, app_token=cur_app_token)
         except Exception:
             feishu_stats = {"deleted": 0, "skipped": 0, "failed": len(record_ids), "results": {rid: False for rid in record_ids}}
 

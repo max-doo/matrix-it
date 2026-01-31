@@ -195,6 +195,49 @@ def get_feishu_config(config: dict) -> dict:
     return fc
 
 
+def resolve_feishu_config_credentials(client: lark.Client, fc: dict) -> dict:
+    """
+    解析飞书配置中的凭证，特别是处理 Wiki Token。
+    
+    Args:
+        client: 已初始化的飞书客户端
+        fc: get_feishu_config 返回的配置字典
+        
+    Returns:
+        更新后的配置字典 (主要是 app_token 可能被替换为真实 token)
+    """
+    # Wiki Token 解析逻辑
+    if fc.get("_is_wiki") or (fc.get("bitable_url") and "/wiki/" in fc.get("bitable_url", "")):
+        raw_token = fc.get("app_token")
+        if not raw_token:
+            return fc
+            
+        try:
+             import sys
+             sys.stderr.write(f"[FEISHU] 检测到 Wiki URL，尝试解析真实 App Token...\n")
+        except Exception:
+             pass
+             
+        real_token = resolve_wiki_token(client, raw_token)
+        if real_token:
+            fc["app_token"] = real_token
+            try:
+                import sys
+                sys.stderr.write(f"[FEISHU] Wiki Token 解析成功: {raw_token[:6]}... -> {real_token[:6]}...\n")
+            except Exception:
+                pass
+        else:
+             # 解析失败，可能是权限不足或 token 错误，但我们仍尝试用原 token 继续，
+             # 或者直接报错？通常 Wiki Token 直接用在 Bitable API 会失败。
+             # 打印警告。
+             try:
+                 import sys
+                 sys.stderr.write(f"[FEISHU] ⚠ Wiki Token 解析失败，后续操作可能会出错。请检查应用是否有 Wiki 读取权限。\n")
+             except Exception:
+                 pass
+    return fc
+
+
 
 def create_client(app_id: str, app_secret: str) -> lark.Client:
     """
@@ -621,30 +664,8 @@ def upload_items(
 
     client = create_client(fc["app_id"], fc["app_secret"])
     
-    # Wiki Token 解析逻辑
-    if fc.get("_is_wiki") or (fc.get("bitable_url") and "/wiki/" in fc.get("bitable_url", "")):
-        raw_token = fc["app_token"]
-        try:
-             import sys
-             sys.stderr.write(f"[FEISHU] 检测到 Wiki URL，尝试解析真实 App Token...\n")
-        except Exception:
-             pass
-             
-        real_token = resolve_wiki_token(client, raw_token)
-        if real_token:
-            fc["app_token"] = real_token
-            try:
-                sys.stderr.write(f"[FEISHU] Wiki Token 解析成功: {raw_token[:6]}... -> {real_token[:6]}...\n")
-            except Exception:
-                pass
-        else:
-             # 解析失败，可能是权限不足或 token 错误，但我们仍尝试用原 token 继续，
-             # 或者直接报错？通常 Wiki Token 直接用在 Bitable API 会失败。
-             # 打印警告。
-             try:
-                 sys.stderr.write(f"[FEISHU] ⚠ Wiki Token 解析失败，后续操作可能会出错。请检查应用是否有 Wiki 读取权限。\n")
-             except Exception:
-                 pass
+    # 解析 Wiki Token
+    fc = resolve_feishu_config_credentials(client, fc)
 
     base_sig = f"{str(fc.get('app_token') or '').strip()}:{str(fc.get('table_id') or '').strip()}"
 
@@ -1042,15 +1063,25 @@ def upload_items(
     return stats, items
 
 
-def batch_get_records(config_dict: dict, record_ids: List[str]) -> dict:
+def batch_get_records(config_dict: dict, record_ids: List[str], app_token: Optional[str] = None) -> dict:
     fc = get_feishu_config(config_dict)
     if not all(k in fc for k in ["app_id", "app_secret", "app_token", "table_id"]):
         raise ValueError("飞书配置不完整")
+    
+    # Use provided app_token if available
+    target_token = app_token if app_token else fc["app_token"]
+    
     ids = [str(rid or "").strip() for rid in (record_ids or []) if str(rid or "").strip()]
     if not ids:
         return {"present": [], "absent": [], "forbidden": []}
 
     client = create_client(fc["app_id"], fc["app_secret"])
+    
+    # If app_token not provided and looks like Wiki, resolve it
+    if not app_token and (fc.get("_is_wiki") or (fc.get("bitable_url") and "/wiki/" in fc.get("bitable_url", ""))):
+        fc = resolve_feishu_config_credentials(client, fc)
+        target_token = fc["app_token"]
+
     present: List[str] = []
     absent: List[str] = []
     forbidden: List[str] = []
@@ -1060,7 +1091,7 @@ def batch_get_records(config_dict: dict, record_ids: List[str]) -> dict:
         chunk = ids[i : i + chunk_size]
         req = (
             BatchGetAppTableRecordRequest.builder()
-            .app_token(fc["app_token"])
+            .app_token(target_token)
             .table_id(fc["table_id"])
             .request_body(BatchGetAppTableRecordRequestBody.builder().record_ids(chunk).build())
             .build()
@@ -1088,13 +1119,14 @@ def batch_get_records(config_dict: dict, record_ids: List[str]) -> dict:
     return {"present": present, "absent": absent, "forbidden": forbidden}
 
 
-def delete_records(config_dict: dict, record_ids: List[str]) -> dict:
+def delete_records(config_dict: dict, record_ids: List[str], app_token: Optional[str] = None) -> dict:
     """
     批量删除飞书多维表中的记录。
     
     Args:
         config_dict: 配置字典
         record_ids: 待删除的 record_id 列表
+        app_token: 可选，已解析的 App Token
         
     Returns:
         stats: 删除结果统计 {"deleted": int, "failed": int, ...}
@@ -1105,6 +1137,14 @@ def delete_records(config_dict: dict, record_ids: List[str]) -> dict:
 
     client = create_client(fc["app_id"], fc["app_secret"])
 
+    # Use provided app_token if available
+    target_token = app_token if app_token else fc["app_token"]
+
+    # If app_token not provided and looks like Wiki, resolve it
+    if not app_token and (fc.get("_is_wiki") or (fc.get("bitable_url") and "/wiki/" in fc.get("bitable_url", ""))):
+        fc = resolve_feishu_config_credentials(client, fc)
+        target_token = fc["app_token"]
+
     stats = {"deleted": 0, "skipped": 0, "failed": 0, "results": {}}
     for rid in record_ids:
         rid = str(rid or "").strip()
@@ -1114,7 +1154,7 @@ def delete_records(config_dict: dict, record_ids: List[str]) -> dict:
         try:
             req = (
                 DeleteAppTableRecordRequest.builder()
-                .app_token(fc["app_token"])
+                .app_token(target_token)
                 .table_id(fc["table_id"])
                 .record_id(rid)
                 .build()

@@ -2,7 +2,7 @@
   "feishu": {
     "app_id": "",
     "app_secret": "",
-    "attachment_sync": true,
+    "attachment_sync": false,
     "bitable_url": "",
     "meta_sync": [
       "type",
