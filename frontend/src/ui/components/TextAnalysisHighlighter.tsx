@@ -118,8 +118,8 @@ export function TextAnalysisHighlighter({
                                         ul: (props: any) => <ul className="pl-5 list-disc mb-2 last:mb-0 space-y-1">{props.children}</ul>,
                                         ol: (props: any) => <ol className="pl-5 list-decimal mb-2 last:mb-0 space-y-1">{props.children}</ol>,
                                         li: (props: any) => <li className="leading-relaxed">{props.children}</li>,
-                                        blockquote: (props: any) => <blockquote className="border-l-4 border-slate-500 pl-2 italic text-slate-400 my-2">{props.children}</blockquote>,
-                                        strong: (props: any) => <strong className="font-semibold text-slate-200">{props.children}</strong>,
+                                        blockquote: (props: any) => <blockquote className="border-l-4 border-orange-400 pl-2 italic text-orange-200 my-2">{props.children}</blockquote>,
+                                        strong: (props: any) => <strong className="font-semibold">{props.children}</strong>,
                                         a: (props: any) => <a href={props.href} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300">{props.children}</a>,
                                         table: (props: any) => <table className="w-full border-collapse border border-slate-600 my-2 text-sm">{props.children}</table>,
                                         thead: (props: any) => <thead className="bg-slate-800">{props.children}</thead>,
@@ -251,15 +251,23 @@ export function TextAnalysisHighlighter({
         handleClose()
     }
 
-    // 更新现有高亮 (评论)
-    const handleUpdateComment = () => {
+    // 更新现有高亮 (评论) - 即时保存
+    const handleUpdateComment = useCallback((newComment: string) => {
         if (!selectionState?.activeAnnotationId) return
         const next = annotations.map((a) =>
-            a.id === selectionState.activeAnnotationId ? { ...a, comment: commentDraft } : a
+            a.id === selectionState.activeAnnotationId ? { ...a, comment: newComment } : a
         )
         onChange(next)
-        handleClose()
-    }
+    }, [selectionState?.activeAnnotationId, annotations, onChange])
+
+    // 防抖自动保存
+    useEffect(() => {
+        if (!selectionState?.activeAnnotationId || selectionState.isNew) return
+        const timer = setTimeout(() => {
+            handleUpdateComment(commentDraft)
+        }, 500)
+        return () => clearTimeout(timer)
+    }, [commentDraft, selectionState?.activeAnnotationId, selectionState?.isNew])
 
     // 删除高亮
     const handleDelete = () => {
@@ -316,7 +324,7 @@ export function TextAnalysisHighlighter({
 
                     menuItems.push({
                         key: 'copy-highlight',
-                        label: '复制',
+                        label: '复制高亮',
                         icon: <CopyOutlined />,
                         onClick: () => {
                             void navigator.clipboard.writeText(ann.text)
@@ -403,23 +411,34 @@ export function TextAnalysisHighlighter({
                             ) : (
                                 // 编辑模式：改颜色 + 评论 + 删除
                                 <>
-                                    <div className="flex gap-2 justify-center pb-2 border-b border-slate-100">
-                                        {COLORS.map((c) => (
-                                            <button
-                                                key={c.key}
-                                                className={`w-5 h-5 rounded-full border border-slate-200 hover:scale-110 transition-transform ${annotations.find((a) => a.id === selectionState.activeAnnotationId)?.color === c.key
-                                                    ? 'ring-2 ring-primary ring-offset-1'
-                                                    : ''
-                                                    }`}
-                                                style={{ backgroundColor: c.value }}
-                                                onClick={() => {
-                                                    const next = annotations.map((a) =>
-                                                        a.id === selectionState.activeAnnotationId ? { ...a, color: c.key } : a
-                                                    )
-                                                    onChange(next)
-                                                }}
-                                            />
-                                        ))}
+                                    <div className="flex gap-2 justify-between items-center pb-2 border-b border-slate-100">
+                                        <div className="flex gap-2">
+                                            {COLORS.map((c) => (
+                                                <button
+                                                    key={c.key}
+                                                    className={`w-5 h-5 rounded-full border border-slate-200 hover:scale-110 transition-transform ${annotations.find((a) => a.id === selectionState.activeAnnotationId)?.color === c.key
+                                                        ? 'ring-2 ring-primary ring-offset-1'
+                                                        : ''
+                                                        }`}
+                                                    style={{ backgroundColor: c.value }}
+                                                    onClick={() => {
+                                                        const next = annotations.map((a) =>
+                                                            a.id === selectionState.activeAnnotationId ? { ...a, color: c.key } : a
+                                                        )
+                                                        onChange(next)
+                                                    }}
+                                                />
+                                            ))}
+                                        </div>
+                                        <Button
+                                            type="text"
+                                            danger
+                                            size="small"
+                                            icon={<DeleteOutlined />}
+                                            onClick={handleDelete}
+                                        >
+                                            删除高亮
+                                        </Button>
                                     </div>
                                     <Input.TextArea
                                         placeholder="添加评论..."
@@ -428,20 +447,6 @@ export function TextAnalysisHighlighter({
                                         autoSize={{ minRows: 2, maxRows: 24 }}
                                         className="text-xs"
                                     />
-                                    <div className="flex justify-between items-center pt-1">
-                                        <Button
-                                            type="text"
-                                            danger
-                                            size="small"
-                                            icon={<DeleteOutlined />}
-                                            onClick={handleDelete}
-                                        >
-                                            删除
-                                        </Button>
-                                        <Button type="primary" size="small" onClick={handleUpdateComment}>
-                                            保存
-                                        </Button>
-                                    </div>
                                 </>
                             )}
                         </div>
