@@ -1082,6 +1082,7 @@ export function LiteratureTable({
                     onChange={() => { }}
                     onViewDetails={() => onOpenDetail(record.item_key)}
                     readOnly={true}
+                    showViewDetails={true}
                   />
                 </div>
               )

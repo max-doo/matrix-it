@@ -14,6 +14,7 @@ export type TextAnalysisHighlighterProps = {
     onAnalyze?: (text: string, id?: string) => void
     onViewDetails?: (id: string) => void
     onReadOriginal?: (id: string) => void
+    showViewDetails?: boolean
 }
 
 type SelectionState = {
@@ -39,6 +40,7 @@ export function TextAnalysisHighlighter({
     onAnalyze,
     onViewDetails,
     onReadOriginal,
+    showViewDetails = false,
 }: TextAnalysisHighlighterProps) {
     const containerRef = useRef<HTMLDivElement>(null)
     const [selectionState, setSelectionState] = useState<SelectionState | null>(null)
@@ -292,12 +294,15 @@ export function TextAnalysisHighlighter({
             if (annotationId) {
                 const ann = annotations.find((a) => a.id === annotationId)
                 if (ann) {
-                    menuItems.push({
-                        key: 'view-details',
-                        label: '查看详情',
-                        icon: <EyeOutlined />,
-                        onClick: () => onViewDetails?.(ann.id),
-                    })
+                    if (showViewDetails) {
+                        menuItems.push({
+                            key: 'view-details',
+                            label: '查看详情',
+                            icon: <EyeOutlined />,
+                            onClick: () => onViewDetails?.(ann.id),
+                        })
+                    }
+
                     menuItems.push({
                         key: 'copy-highlight',
                         label: '复制',
@@ -349,7 +354,7 @@ export function TextAnalysisHighlighter({
                 showMenu(menuItems, { x: e.clientX, y: e.clientY })
             }
         },
-        [annotations, onChange, readOnly, showMenu, onAnalyze, onReadOriginal, onViewDetails]
+        [annotations, onChange, readOnly, showMenu, onAnalyze, onReadOriginal, onViewDetails, showViewDetails]
     )
 
     return (
