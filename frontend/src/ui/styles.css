@@ -279,3 +279,14 @@ th:hover .matrixit-col-resizer::before {
   font-weight: 700;
   color: var(--primary-color);
 }
+
+/* 防止 Tooltip 溢出视口 */
+.ant-tooltip {
+  max-width: min(500px, 90vw) !important;
+}
+
+.ant-tooltip-inner {
+  max-height: 50vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}

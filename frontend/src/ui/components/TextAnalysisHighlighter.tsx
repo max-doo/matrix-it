@@ -1,8 +1,12 @@
 
-import { DeleteOutlined, HighlightOutlined, MessageOutlined, CopyOutlined, EyeOutlined, FileTextOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { Button, Input, Popover, Space, theme, Tooltip, message } from 'antd'
+import { DeleteOutlined, CopyOutlined, EyeOutlined } from '@ant-design/icons'
+import { Button, Input, Popover, Tooltip, message } from 'antd'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 import type { Annotation } from '../../types'
 import { useContextMenu } from './GlobalContextMenu'
 
@@ -47,8 +51,6 @@ export function TextAnalysisHighlighter({
     const [selectionState, setSelectionState] = useState<SelectionState | null>(null)
     const [commentDraft, setCommentDraft] = useState('')
     const { showMenu } = useContextMenu()
-
-    const { token } = theme.useToken()
 
     // 1. 渲染逻辑：将文本切片并插入高亮元素
     const renderContent = useMemo(() => {
@@ -104,21 +106,37 @@ export function TextAnalysisHighlighter({
                     <Tooltip
                         key={`tooltip-${ann.id}`}
                         title={
-                            <div className="whitespace-normal break-words markdown-tooltip max-h-[400px] overflow-y-auto custom-scrollbar">
+                            <div className="whitespace-normal break-words markdown-tooltip max-h-[50vh] overflow-y-auto custom-scrollbar">
                                 <ReactMarkdown
+                                    remarkPlugins={[remarkGfm, remarkMath]}
+                                    rehypePlugins={[rehypeKatex]}
                                     components={{
-                                        p: (props: any) => <div className="mb-1 last:mb-0">{props.children}</div>,
-                                        ul: (props: any) => <ul className="pl-4 list-disc mb-1 last:mb-0">{props.children}</ul>,
-                                        ol: (props: any) => <ol className="pl-4 list-decimal mb-1 last:mb-0">{props.children}</ol>,
-                                        a: (props: any) => <a href={props.href} target="_blank" rel="noopener noreferrer" className="text-blue-300 underline hover:text-blue-200">{props.children}</a>
+                                        h1: (props: any) => <h1 className="text-xl font-bold mb-2 mt-2 first:mt-0 pb-1 border-b border-slate-600">{props.children}</h1>,
+                                        h2: (props: any) => <h2 className="text-lg font-bold mb-2 mt-2 first:mt-0">{props.children}</h2>,
+                                        h3: (props: any) => <h3 className="text-base font-bold mb-1 mt-1 first:mt-0">{props.children}</h3>,
+                                        p: (props: any) => <div className="text-sm leading-relaxed mb-2 last:mb-0">{props.children}</div>,
+                                        ul: (props: any) => <ul className="pl-5 list-disc mb-2 last:mb-0 space-y-1">{props.children}</ul>,
+                                        ol: (props: any) => <ol className="pl-5 list-decimal mb-2 last:mb-0 space-y-1">{props.children}</ol>,
+                                        li: (props: any) => <li className="leading-relaxed">{props.children}</li>,
+                                        blockquote: (props: any) => <blockquote className="border-l-4 border-slate-500 pl-2 italic text-slate-400 my-2">{props.children}</blockquote>,
+                                        strong: (props: any) => <strong className="font-semibold text-slate-200">{props.children}</strong>,
+                                        a: (props: any) => <a href={props.href} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300">{props.children}</a>,
+                                        table: (props: any) => <table className="w-full border-collapse border border-slate-600 my-2 text-sm">{props.children}</table>,
+                                        thead: (props: any) => <thead className="bg-slate-800">{props.children}</thead>,
+                                        tbody: (props: any) => <tbody>{props.children}</tbody>,
+                                        tr: (props: any) => <tr className="border-b border-slate-700 last:border-0 hover:bg-slate-700/50">{props.children}</tr>,
+                                        th: (props: any) => <th className="p-2 text-left font-semibold border-r border-slate-600 last:border-0 text-slate-200">{props.children}</th>,
+                                        td: (props: any) => <td className="p-2 border-r border-slate-700 last:border-0 align-top">{props.children}</td>
                                     }}
                                 >
-                                    {ann.comment}
+                                    {ann.comment?.replace(/(.+)\n\s*(-{3,})/g, '$1\n\n$2')}
                                 </ReactMarkdown>
                             </div>
                         }
                         color="#1e293b"
-                        overlayStyle={{ maxWidth: 500 }}
+                        overlayStyle={{ maxWidth: 'min(500px, 90vw)' }}
+                        autoAdjustOverflow
+                        getPopupContainer={(triggerNode) => triggerNode.parentElement || document.body}
                     >
                         {highlightSpan}
                     </Tooltip>
@@ -346,7 +364,7 @@ export function TextAnalysisHighlighter({
                 showMenu(menuItems, { x: e.clientX, y: e.clientY })
             }
         },
-        [annotations, onChange, readOnly, showMenu, onAnalyze, onReadOriginal, onViewDetails, showViewDetails]
+        [annotations, onChange, readOnly, showMenu, onViewDetails, showViewDetails]
     )
 
     return (
