@@ -1,6 +1,6 @@
 
 import { DeleteOutlined, CopyOutlined, EyeOutlined } from '@ant-design/icons'
-import { Button, Input, Popover, Tooltip, message } from 'antd'
+import { Button, Input, Popover, Tooltip, message, Typography, Modal } from 'antd'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -9,6 +9,7 @@ import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import type { Annotation } from '../../types'
 import { useContextMenu } from './GlobalContextMenu'
+import { getHighlightRegex } from '../utils/ui-formatters'
 
 export type TextAnalysisHighlighterProps = {
     text: string
@@ -20,6 +21,7 @@ export type TextAnalysisHighlighterProps = {
     onViewDetails?: (id: string) => void
     onReadOriginal?: (id: string) => void
     showViewDetails?: boolean
+    highlightQuery?: string
 }
 
 type SelectionState = {
@@ -46,6 +48,7 @@ export function TextAnalysisHighlighter({
     onViewDetails,
     onReadOriginal,
     showViewDetails = false,
+    highlightQuery,
 }: TextAnalysisHighlighterProps) {
     const containerRef = useRef<HTMLDivElement>(null)
     const [selectionState, setSelectionState] = useState<SelectionState | null>(null)
@@ -65,18 +68,57 @@ export function TextAnalysisHighlighter({
             .sort((a, b) => a.start - b.start)
 
         if (validAnnotations.length === 0) {
-            return <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{text}</span>
+            // 如果只有搜索高亮，没有分析高亮
+            const regex = highlightQuery ? getHighlightRegex(highlightQuery) : null
+            if (!regex || !text) {
+                return <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{text}</span>
+            }
+
+            const parts = text.split(regex)
+            return (
+                <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                    {parts.map((part, idx) =>
+                        idx % 2 === 1 ? (
+                            <Typography.Text key={idx} mark className="!p-0 !mx-0 rounded-[2px]">
+                                {part}
+                            </Typography.Text>
+                        ) : (
+                            part
+                        )
+                    )}
+                </span>
+            )
         }
+
 
         const nodes: React.ReactNode[] = []
         let lastIndex = 0
 
         validAnnotations.forEach((ann) => {
-            // 添加普通文本
+            // 添加普通文本 (尝试在该段文本中进行搜索高亮)
             if (ann.start > lastIndex) {
+                const subText = text.slice(lastIndex, ann.start)
+                const regex = highlightQuery ? getHighlightRegex(highlightQuery) : null
+                let content: React.ReactNode = subText
+
+                if (regex && subText) {
+                    const parts = subText.split(regex)
+                    if (parts.length > 1) {
+                        content = parts.map((part, idx) =>
+                            idx % 2 === 1 ? (
+                                <Typography.Text key={`h-${lastIndex}-${idx}`} mark className="!p-0 !mx-0 rounded-[2px]">
+                                    {part}
+                                </Typography.Text>
+                            ) : (
+                                part
+                            )
+                        )
+                    }
+                }
+
                 nodes.push(
                     <span key={`text-${lastIndex}`} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                        {text.slice(lastIndex, ann.start)}
+                        {content}
                     </span>
                 )
             }
@@ -87,7 +129,7 @@ export function TextAnalysisHighlighter({
                 <span
                     key={`ann-${ann.id}`}
                     data-annotation-id={ann.id}
-                    className="cursor-pointer whitespace-pre-wrap break-words [overflow-wrap:anywhere] transition-colors hover:brightness-95"
+                    className="cursor-pointer whitespace-pre-wrap break-words [overflow-wrap:anywhere] transition-colors hover:brightness-95 relative"
                     style={{
                         backgroundColor: colorDef?.value || '#fef08a',
                         borderBottom: '2px solid transparent',
@@ -98,6 +140,17 @@ export function TextAnalysisHighlighter({
                     }}
                 >
                     {text.slice(ann.start, ann.end)}
+                    {ann.comment && (
+                        <div
+                            className="absolute w-1.5 h-1.5 rounded-full"
+                            style={{
+                                top: '-3px',
+                                left: '-3px',
+                                backgroundColor: 'var(--primary-color)',
+                                pointerEvents: 'none'
+                            }}
+                        />
+                    )}
                 </span>
             )
 
@@ -148,17 +201,36 @@ export function TextAnalysisHighlighter({
             lastIndex = ann.end
         })
 
-        // 添加剩余文本
+        // 添加剩余文本 (尝试搜索高亮)
         if (lastIndex < text.length) {
+            const subText = text.slice(lastIndex)
+            const regex = highlightQuery ? getHighlightRegex(highlightQuery) : null
+            let content: React.ReactNode = subText
+
+            if (regex && subText) {
+                const parts = subText.split(regex)
+                if (parts.length > 1) {
+                    content = parts.map((part, idx) =>
+                        idx % 2 === 1 ? (
+                            <Typography.Text key={`h-${lastIndex}-${idx}`} mark className="!p-0 !mx-0 rounded-[2px]">
+                                {part}
+                            </Typography.Text>
+                        ) : (
+                            part
+                        )
+                    )
+                }
+            }
+
             nodes.push(
                 <span key={`text-${lastIndex}`} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                    {text.slice(lastIndex)}
+                    {content}
                 </span>
             )
         }
 
         return nodes
-    }, [text, annotations])
+    }, [text, annotations, highlightQuery])
 
     // 2. 处理选区
     const handleMouseUp = useCallback(() => {
@@ -176,6 +248,10 @@ export function TextAnalysisHighlighter({
 
         // 确保选区在我们的容器内
         if (!containerRef.current?.contains(range.commonAncestorContainer)) return
+
+        // 忽略 Tooltip 内的选区，避免在 Tooltip 中选择文字时弹出颜色选择器
+        const commonAncestor = range.commonAncestorContainer as HTMLElement
+        if (commonAncestor.closest?.('.ant-tooltip') || (commonAncestor.parentElement?.closest?.('.ant-tooltip'))) return
 
         // 简便方案：使用 selection 的 anchorNode 和 focusNode 来计算
         // 规避复杂的跨节点 Range 计算
@@ -272,9 +348,27 @@ export function TextAnalysisHighlighter({
     // 删除高亮
     const handleDelete = () => {
         if (!selectionState?.activeAnnotationId) return
-        const next = annotations.filter((a) => a.id !== selectionState.activeAnnotationId)
-        onChange(next)
-        handleClose()
+        const ann = annotations.find((a) => a.id === selectionState.activeAnnotationId)
+
+        const doDelete = () => {
+            const next = annotations.filter((a) => a.id !== selectionState.activeAnnotationId)
+            onChange(next)
+            handleClose()
+        }
+
+        // 有评论时需要确认
+        if (ann?.comment) {
+            Modal.confirm({
+                title: '确认删除',
+                content: '该高亮包含评论内容，删除后将无法恢复。确定要删除吗？',
+                okText: '删除',
+                okButtonProps: { danger: true },
+                cancelText: '取消',
+                onOk: doDelete,
+            })
+        } else {
+            doDelete()
+        }
     }
 
     // 监听全局点击以关闭 Popover (如果点击在外部)
@@ -340,8 +434,24 @@ export function TextAnalysisHighlighter({
                             icon: <DeleteOutlined />,
                             danger: true,
                             onClick: () => {
-                                const next = annotations.filter((a) => a.id !== annotationId)
-                                onChange(next)
+                                const doDelete = () => {
+                                    const next = annotations.filter((a) => a.id !== annotationId)
+                                    onChange(next)
+                                }
+
+                                // 有评论时需要确认
+                                if (ann.comment) {
+                                    Modal.confirm({
+                                        title: '确认删除',
+                                        content: '该高亮包含评论内容，删除后将无法恢复。确定要删除吗？',
+                                        okText: '删除',
+                                        okButtonProps: { danger: true },
+                                        cancelText: '取消',
+                                        onOk: doDelete,
+                                    })
+                                } else {
+                                    doDelete()
+                                }
                             },
                         })
                     }
@@ -430,15 +540,30 @@ export function TextAnalysisHighlighter({
                                                 />
                                             ))}
                                         </div>
-                                        <Button
-                                            type="text"
-                                            danger
-                                            size="small"
-                                            icon={<DeleteOutlined />}
-                                            onClick={handleDelete}
-                                        >
-                                            删除高亮
-                                        </Button>
+                                        <div className="flex gap-2">
+                                            {commentDraft && (
+                                                <Button
+                                                    type="text"
+                                                    size="small"
+                                                    icon={<CopyOutlined />}
+                                                    onClick={() => {
+                                                        void navigator.clipboard.writeText(commentDraft)
+                                                        message.success('已复制评论')
+                                                    }}
+                                                >
+                                                    复制评论
+                                                </Button>
+                                            )}
+                                            <Button
+                                                type="text"
+                                                danger
+                                                size="small"
+                                                icon={<DeleteOutlined />}
+                                                onClick={handleDelete}
+                                            >
+                                                删除高亮
+                                            </Button>
+                                        </div>
                                     </div>
                                     <Input.TextArea
                                         placeholder="添加评论..."

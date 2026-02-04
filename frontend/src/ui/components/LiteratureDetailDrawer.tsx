@@ -250,6 +250,7 @@ export function LiteratureDetailDrawer({
   /**
    * 保存操作
    * 计算 Diff（仅提交变更过的字段），调用 onSave 回调，更新快照。
+   * 如果被修改的字段中有包含评论的高亮，会先弹出确认对话框。
    */
   const handleSave = useCallback(async () => {
     if (!item || !onSave) return
@@ -257,6 +258,9 @@ export function LiteratureDetailDrawer({
     let metaExtraChanged = false
     const currentMeta = (item as any).meta_extra || {}
     let nextAnnotations = { ...((currentMeta.annotations || {}) as AnnotationMap) }
+
+    // 收集将要被删除的有评论的高亮所在的字段
+    const fieldsWithCommentedAnnotations: string[] = []
 
     for (const f of analysisFields) {
       const prev = f.type === 'multi_select' ? normalizeMultiSelectValue(snapshot[f.key] ?? '') : normalizeTextValue(snapshot[f.key] ?? '')
@@ -271,8 +275,15 @@ export function LiteratureDetailDrawer({
         patch[f.key] = next.trim()
       }
 
+      // 检查该字段是否有包含评论的高亮
+      const fieldAnnotations = nextAnnotations[f.key] || []
+      const hasCommented = fieldAnnotations.some((ann: Annotation) => ann.comment && ann.comment.trim().length > 0)
+      if (hasCommented) {
+        fieldsWithCommentedAnnotations.push(f.label)
+      }
+
       // Cleanup Annotations for this field
-      if (nextAnnotations[f.key] && nextAnnotations[f.key].length > 0) {
+      if (fieldAnnotations.length > 0) {
         delete nextAnnotations[f.key]
         metaExtraChanged = true
       }
@@ -281,6 +292,22 @@ export function LiteratureDetailDrawer({
     if (Object.keys(patch).length === 0 && !metaExtraChanged) {
       setIsEditing(false)
       return
+    }
+
+    // 如果有包含评论的高亮将被删除，弹出确认对话框
+    if (fieldsWithCommentedAnnotations.length > 0) {
+      const confirmed = await new Promise<boolean>((resolve) => {
+        modal.confirm({
+          title: '确认保存',
+          content: `以下字段包含带评论的高亮，保存后将删除这些高亮及评论：\n${fieldsWithCommentedAnnotations.join('、')}`,
+          okText: '确认保存',
+          okButtonProps: { danger: true },
+          cancelText: '取消',
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        })
+      })
+      if (!confirmed) return
     }
 
     if (metaExtraChanged) {
@@ -302,7 +329,7 @@ export function LiteratureDetailDrawer({
     } finally {
       setSaving(false)
     }
-  }, [analysisFields, draft, item, normalizeMultiSelectValue, normalizeTextValue, onSave, snapshot])
+  }, [analysisFields, draft, item, modal, normalizeMultiSelectValue, normalizeTextValue, onSave, snapshot])
 
   useEffect(() => {
     if (!canEdit || !isEditing) return

@@ -4,9 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Popover } from 'antd'
-import { BarsOutlined, EyeInvisibleOutlined, EyeOutlined, HolderOutlined } from '@ant-design/icons'
-
-
+import { OrderedListOutlined, EyeInvisibleOutlined, EyeOutlined, HolderOutlined } from '@ant-design/icons'
 
 export type ColumnPanelGroup = 'meta' | 'analysis'
 
@@ -294,7 +292,7 @@ export function ColumnSettingsPopover({
 
   return (
     <Popover trigger="click" placement="bottomRight" open={open} onOpenChange={onOpenChange} content={content}>
-      <Button key="columns" icon={<BarsOutlined />} aria-label="字段设置" title="字段设置" />
+      <Button key="columns" icon={<OrderedListOutlined />} aria-label="字段设置" title="字段设置" />
     </Popover>
   )
 }

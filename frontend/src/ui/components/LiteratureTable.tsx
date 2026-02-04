@@ -12,7 +12,7 @@ import { ProTable } from '@ant-design/pro-components'
 import { useContextMenu } from './GlobalContextMenu'
 
 import type { LiteratureItem, ProcessingStatus } from '../../types'
-import { formatAuthor, formatIF, getJournalTags, getLiteratureTypeMeta } from '../utils/ui-formatters'
+import { escapeRegExp, formatAuthor, formatIF, getJournalTags, getLiteratureTypeMeta } from '../utils/ui-formatters'
 import {
   RATING_OPTIONS,
   RATING_EMOJI_MAP,
@@ -86,7 +86,7 @@ const truncateText = (text: string, maxLen: number) => {
   return s.slice(0, maxLen - 1) + '…'
 }
 
-const escapeRegExp = (input: string) => input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 
 /**
  * 辅助函数：生成状态徽标
@@ -1083,6 +1083,7 @@ export function LiteratureTable({
                     onViewDetails={() => onOpenDetail(record.item_key)}
                     readOnly={true}
                     showViewDetails={true}
+                    highlightQuery={highlightQuery}
                   />
                 </div>
               )

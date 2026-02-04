@@ -170,3 +170,25 @@ export function getJournalTags(record: { meta_extra?: { jcr?: { quartile?: strin
 
     return tags
 }
+
+// ==================== 搜索高亮工具函数 ====================
+
+/**
+ * 转义正则表达式特殊字符
+ */
+export const escapeRegExp = (input: string) => input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * 根据搜索词生成用于高亮的正则表达式
+ */
+export const getHighlightRegex = (query: string): RegExp | null => {
+    const normalized = String(query ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+    const tokens = normalized ? normalized.split(' ').filter(Boolean) : []
+    if (tokens.length === 0) return null
+    const pattern = tokens.map(escapeRegExp).join('|')
+    if (!pattern) return null
+    return new RegExp(`(${pattern})`, 'ig')
+}
