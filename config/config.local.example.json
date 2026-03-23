@@ -1,4 +1,9 @@
 {
+  "feishu": {
+    "app_id": "YOUR_FEISHU_APP_ID",
+    "app_secret": "YOUR_FEISHU_APP_SECRET",
+    "bitable_url": "https://your-domain.feishu.cn/base/..."
+  },
   "llm": {
     "api_key": "YOUR_API_KEY",
     "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -6,6 +11,9 @@
     "temperature": 0.2,
     "parallel_count": 3,
     "multimodal": false
+  },
+  "zotero": {
+    "data_dir": "C:\\Users\\<you>\\Zotero"
   },
   "debug": {
     "enabled": true,

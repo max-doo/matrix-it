@@ -204,7 +204,7 @@ matrix-it/
 - `config/config.json`：默认配置（包含 `fields` 定义与 UI 列配置）
 - `config/config.local.json`：本机覆盖配置（**已在 .gitignore 忽略**）
 
-> ⚠️ **安全提示**：`config/config.json` 当前包含开发环境的 API 密钥。若项目转为 public，必须先清理敏感信息（飞书 App Secret、LLM API Keys 等），或将其加入 `.gitignore`。
+> ⚠️ **安全提示**：公开仓库只保留 `config/config.json` 的安全默认值。请将 API Key、飞书配置和本机路径写入 `config/config.local.json`，不要提交该文件。
 
 复制 [config.local.example.json](./config/config.local.example.json) 为 `config/config.local.json`，至少填写：
 
@@ -216,7 +216,7 @@ matrix-it/
   - 并行上限由系统强制限制：普通模式 ≤10，多模态模式 ≤2
   - 可选：`llm.max_pdf_bytes` 限制上传 PDF 的最大字节数
   - 可选：`llm.max_input_chars` 限制文本回退的最大字符数
-  - 本地 SQLite：默认生成在 `data/matrixit.db`（可用环境变量 `MATRIXIT_DB` 覆盖路径）
+- 本地 SQLite：默认生成在 `data/matrixit.db`（本地生成，不提交到仓库；可用环境变量 `MATRIXIT_DB` 覆盖路径）
   - 数据目录：默认在 `data/`（可用环境变量 `MATRIXIT_DATA_DIR` 覆盖目录）
 
 UI 表格列配置说明（`config/config.json` → `ui.table_columns`）：
